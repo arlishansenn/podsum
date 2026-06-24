@@ -42,6 +42,7 @@ FILLER_RE = re.compile(
     r"你知道的|你知道|我觉得|我认为|就是说|也就是说|其实|基本上|事实上|说实话"
     r")[，,、。！？!?:：;；\s]*"
 )
+EDIT_SUMMARY_LIMIT = 240
 
 
 @dataclass
@@ -76,8 +77,7 @@ class Edit:
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)
-        value["before"] = summarize_edit_text(self.before)
-        value["after"] = summarize_edit_text(self.after)
+        value["before"], value["after"] = summarize_edit_pair(self.before, self.after, EDIT_SUMMARY_LIMIT)
         return value
 
 
@@ -94,7 +94,7 @@ class ResidualPattern:
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)
-        value["text"] = summarize_edit_text(self.text)
+        value["text"] = summarize_edit_text(self.text, EDIT_SUMMARY_LIMIT)
         return value
 
 
@@ -110,11 +110,61 @@ class CleaningResult:
         yield self.stats
 
 
-def summarize_edit_text(text: str, limit: int = 240) -> str:
+def summarize_edit_text(text: str, limit: int) -> str:
     value = text.replace("\n", "\\n")
     if len(value) <= limit:
         return value
     return value[:limit] + "...[truncated]"
+
+
+def find_changed_region(before: str, after: str) -> Tuple[int, int, int, int]:
+    prefix = 0
+    max_prefix = min(len(before), len(after))
+    while prefix < max_prefix and before[prefix] == after[prefix]:
+        prefix += 1
+    suffix = 0
+    before_limit = len(before) - prefix
+    after_limit = len(after) - prefix
+    while suffix < before_limit and suffix < after_limit and before[-1 - suffix] == after[-1 - suffix]:
+        suffix += 1
+    before_end = len(before) - suffix
+    after_end = len(after) - suffix
+    return prefix, before_end, prefix, after_end
+
+
+def summarize_changed_text(text: str, start: int, end: int, limit: int) -> str:
+    if len(text) <= limit:
+        return text.replace("\n", "\\n")
+    bounded_start = max(0, min(start, len(text)))
+    bounded_end = max(bounded_start, min(end, len(text)))
+    changed_length = bounded_end - bounded_start
+    if changed_length >= limit:
+        window_start = bounded_start
+        window_end = min(len(text), bounded_start + limit)
+    else:
+        context = (limit - changed_length) // 2
+        window_start = max(0, bounded_start - context)
+        window_end = min(len(text), bounded_end + context)
+        missing = limit - (window_end - window_start)
+        if missing > 0 and window_start > 0:
+            window_start = max(0, window_start - missing)
+        missing = limit - (window_end - window_start)
+        if missing > 0 and window_end < len(text):
+            window_end = min(len(text), window_end + missing)
+    prefix = "...[truncated]" if window_start > 0 else ""
+    suffix = "...[truncated]" if window_end < len(text) else ""
+    return prefix + text[window_start:window_end].replace("\n", "\\n") + suffix
+
+
+def summarize_edit_pair(before: str, after: str, limit: int) -> Tuple[str, str]:
+    if before == after:
+        summarized = summarize_edit_text(before, limit)
+        return summarized, summarized
+    before_start, before_end, after_start, after_end = find_changed_region(before, after)
+    return (
+        summarize_changed_text(before, before_start, before_end, limit),
+        summarize_changed_text(after, after_start, after_end, limit),
+    )
 
 
 def count_rule_hits(edits: Sequence[Edit]) -> dict[str, int]:
@@ -218,12 +268,51 @@ def is_allowed_restart_gap(gap: str) -> bool:
     return True
 
 
+def find_plain_separator_repeat_end(text: str, unit: str, gap: str, second_end: int) -> Tuple[int, int]:
+    if not is_plain_clause_separator_gap(gap) or count_cjk(unit) < 5:
+        return second_end, 2
+    cursor = second_end
+    copies = 2
+    while text.startswith(gap + unit, cursor):
+        cursor += len(gap) + len(unit)
+        copies += 1
+    return cursor, copies
+
+
+def is_repeat_separator_char(char: str) -> bool:
+    return char in {"，", ",", "、", "；", ";", "。", "！", "？", "!", "?"}
+
+
+def find_trailing_separator_repeat_end(text: str, unit: str, gap: str, second_end: int) -> Tuple[str, int, int]:
+    if gap or len(unit) < 2:
+        return unit, second_end, 2
+    separator = unit[-1]
+    if not is_repeat_separator_char(separator):
+        return unit, second_end, 2
+    base = unit[:-1]
+    if count_cjk(base) < 5:
+        return unit, second_end, 2
+    cursor = second_end
+    copies = 2
+    if text.startswith(base, cursor):
+        cursor += len(base)
+        copies += 1
+    while text.startswith(separator + base, cursor):
+        cursor += len(separator) + len(base)
+        copies += 1
+    return base, cursor, copies
+
+
 def has_semantic_protection_signal(text: str) -> bool:
     return bool(SEMANTIC_PROTECTION_RE.search(text))
 
 
 def is_restart_unit(unit: str) -> bool:
-    if count_cjk(unit) < 3:
+    # 单位长度判定用 CJK+拉丁字母数字合并计数，使英文片段也能满足长度门槛
+    if measure_unit_length(unit) < 3:
+        return False
+    # 跨句（含多个句末标点）的属于句子级重复，交给句块规则处理，不在此收敛
+    if len(re.findall(r"[。！？!?]", unit)) >= 2:
         return False
     if len(set(unit)) <= 2:
         return False
@@ -234,6 +323,24 @@ def is_restart_unit(unit: str) -> bool:
 
 def has_emphasis_continuation(tail: str) -> bool:
     return bool(EMPHASIS_CONTINUATION_RE.match(tail))
+
+
+def is_emphasis_repeat_fragment(unit: str, tail: str) -> bool:
+    normalized_unit = re.sub(r"[\s，,、。！？!?；;：:]+", "", unit)
+    normalized_tail = re.sub(r"[\s，,、。！？!?；;：:]+", "", tail[:8])
+    context = normalized_unit + normalized_tail
+    return "很重要" in context or "重要" in context
+
+
+def is_auto_deletable_short_gap_repeat(unit: str, gap: str, tail: str) -> bool:
+    return (
+        is_restart_unit(unit)
+        and is_allowed_restart_gap(gap)
+        and not has_semantic_protection_signal(gap)
+        and not has_semantic_protection_signal(tail[:15])
+        and not has_emphasis_continuation(tail)
+        and not is_emphasis_repeat_fragment(unit, tail)
+    )
 
 
 def collapse_word_stutters(paragraph: str) -> Tuple[str, int]:
@@ -251,6 +358,20 @@ def collapse_word_stutters(paragraph: str) -> Tuple[str, int]:
         return unit
 
     value = re.sub(r"([\u3400-\u9fff])\1{2,}", replace_single, value)
+
+    max_phrase_len = min(30, len(value) // 3)
+    for unit_len in range(max_phrase_len, 4, -1):
+        pattern = re.compile(rf"([\u3400-\u9fff]{{{unit_len}}})(?:\1){{2,}}")
+
+        def replace_phrase(match: re.Match[str]) -> str:
+            nonlocal removed
+            unit = match.group(1)
+            if len(set(unit)) <= 1:
+                return match.group(0)
+            removed += len(match.group(0)) - len(unit)
+            return unit
+
+        value = pattern.sub(replace_phrase, value)
 
     for unit_len in range(4, 1, -1):
         pattern = re.compile(rf"([\u3400-\u9fff]{{{unit_len}}})(?:\1){{2,}}")
@@ -274,7 +395,7 @@ def collapse_intra_sentence_short_gap_repeats(paragraph: str) -> Tuple[str, int]
     value = paragraph
     if value.lstrip().startswith("#"):
         return value, removed
-    for _ in range(10):
+    while True:
         changed = False
         max_match_len = min(80, len(value) // 2)
         for match_len in range(max_match_len, 2, -1):
@@ -291,12 +412,28 @@ def collapse_intra_sentence_short_gap_repeats(paragraph: str) -> Tuple[str, int]
                     gap = value[rest_start:second_start]
                     if value[second_start:second_end] != unit:
                         continue
-                    if not is_allowed_restart_gap(gap):
-                        continue
+                    if is_plain_clause_separator_gap(gap):
+                        repeat_end, copies = find_plain_separator_repeat_end(value, unit, gap, second_end)
+                        tail = value[repeat_end:]
+                        if copies < 3:
+                            continue
+                        if has_emphasis_continuation(tail):
+                            continue
+                        value = value[:rest_start] + tail
+                        removed += repeat_end - rest_start
+                        changed = True
+                        break
+                    base_unit, repeat_end, copies = find_trailing_separator_repeat_end(value, unit, gap, second_end)
+                    if copies >= 3:
+                        tail = value[repeat_end:]
+                        if has_emphasis_continuation(tail) or "重要" in base_unit:
+                            continue
+                        value = value[:index] + base_unit + tail
+                        removed += repeat_end - index - len(base_unit)
+                        changed = True
+                        break
                     tail = value[second_end:]
-                    if has_semantic_protection_signal(gap) or has_semantic_protection_signal(tail):
-                        continue
-                    if has_emphasis_continuation(tail):
+                    if not is_auto_deletable_short_gap_repeat(unit, gap, tail):
                         continue
                     value = value[:index] + value[second_start:]
                     removed += len(unit) + len(gap)
@@ -336,12 +473,8 @@ def find_residual_short_gap_repeats_in_line(line: str, line_no: int) -> List[Res
                 gap = line[rest_start:second_start]
                 if line[second_start:second_end] != unit:
                     continue
-                if not is_allowed_restart_gap(gap):
-                    continue
                 tail = line[second_end:]
-                if has_semantic_protection_signal(gap) or has_semantic_protection_signal(tail):
-                    continue
-                if has_emphasis_continuation(tail):
+                if not is_auto_deletable_short_gap_repeat(unit, gap, tail):
                     continue
                 matched = ResidualPattern(
                     "residual_short_gap_repeat",
@@ -369,7 +502,16 @@ def scan_residual_short_gap_repeats(text: str) -> List[ResidualPattern]:
 
 
 def count_cjk(text: str) -> int:
+    # 仅统计中日韩字符
     return len(re.findall(r"[\u3400-\u9fff]", text))
+
+
+UNIT_LENGTH_RE = re.compile(r"[\u3400-\u9fffA-Za-z0-9]")
+
+
+def measure_unit_length(text: str) -> int:
+    # 单位长度判定：CJK 字符与拉丁字母数字合并计数，避免纯英文片段长度恒为 0
+    return len(UNIT_LENGTH_RE.findall(text))
 
 
 def normalize_near_duplicate_text(text: str) -> str:
@@ -492,6 +634,9 @@ def collapse_shared_prefix_clauses(
         following = "".join(parts[index + 3 : index + 5])
         if left_body == right_body:
             if has_emphasis_continuation(following):
+                index += 2
+                continue
+            if count_cjk(left_body) < 5 and has_emphasis_continuation(separator + right_body):
                 index += 2
                 continue
             parts[index + 1] = ""
@@ -694,10 +839,14 @@ def clean_text(text: str, *, min_prefix_cjk: int = 5) -> CleaningResult:
         body = "".join(units)
         if body != after_embedded:
             edits.append(Edit("adjacent_sentence_block", after_embedded, body, 0.99, line_no, True, False))
+        after_final_gap, final_gap_removed = collapse_intra_sentence_short_gap_repeats(body)
+        if after_final_gap != body:
+            edits.append(Edit("short_gap_repeat", body, after_final_gap, 0.99, line_no, True, False))
+        body = after_final_gap
         edits.extend(report_near_duplicate_sentence_candidates(body, line_no))
         output.append(body + newline)
         paragraphs_changed += int(body != before)
-        gap_removed += line_gap_removed
+        gap_removed += line_gap_removed + final_gap_removed
         word_stutter_removed += line_word_stutter_removed
         removed_units += embedded_units + adjacent_units
         removed_blocks += embedded_blocks + adjacent_blocks

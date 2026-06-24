@@ -6,6 +6,7 @@ from .cleaner import (
     Edit,
     ResidualPattern,
     clean_text,
+    measure_unit_length,
     scan_residual_short_gap_repeats,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "Edit",
     "ResidualPattern",
     "clean_text",
+    "measure_unit_length",
     "scan_residual_short_gap_repeats",
 ]
