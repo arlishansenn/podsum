@@ -1,5 +1,9 @@
 # Transcript Cleaner
 
+The Hermes integration is maintained at
+`../../skills/media/transcript-cleaner/`. Do not create another embedded Skill
+copy inside this package.
+
 这是 Podsum 仓库中的独立子项目。它不接入 podcast 定时任务，不修改 Podsum state，也不会自动发送 Discord 或飞书。
 
 ## 输入输出

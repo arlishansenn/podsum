@@ -15,6 +15,27 @@ documentation are in [`outputs/`](outputs/README.md).
 The independent transcript cleaning project is in
 [`outputs/transcript_cleaner/`](outputs/transcript_cleaner/README.md).
 
+## Hermes Skills
+
+Podsum owns the project-specific copies of the Hermes skills used by the
+transcript cleanup and delivery workflow:
+
+```text
+skills/media/transcript-cleaner/
+skills/markdown-to-epub-converter/
+skills/social-media/hermes-feishu-file-send/  # frontmatter name: send-file
+```
+
+The project copies are the source of truth. Install or refresh all three in the
+active Hermes profile with:
+
+```bash
+./scripts/install-hermes-skills.sh --restart
+```
+
+The installer preserves the existing Hermes category paths so references inside
+the skills remain valid.
+
 ## Test
 
 ```bash
