@@ -1,0 +1,40 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local test and runtime data
+work/
+state.json
+feishu_sent.json
+*.log
+*.err.log
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# Downloaded and generated media
+*.mp3
+*.m4a
+*.wav
+*.flac
+*.mp4
+*.epub
+*.report.json
+
+# Temporary files
+*.tmp
+*.part
+*~

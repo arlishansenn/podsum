@@ -1,0 +1,24 @@
+{
+  "feeds": [
+    {
+      "title": "All-In with Chamath, Jason, Sacks & Friedberg",
+      "author": "All-In Podcast, LLC",
+      "feed_url": "https://allinchamathjason.libsyn.com/rss"
+    },
+    {
+      "title": "Hidden Brain",
+      "author": "Hidden Brain, Shankar Vedantam",
+      "feed_url": "https://www.npr.org/rss/podcast.php?id=510308"
+    },
+    {
+      "title": "Lex Fridman Podcast",
+      "author": "Lex Fridman",
+      "feed_url": "https://lexfridman.com/feed/podcast/"
+    },
+    {
+      "title": "Masters of Scale",
+      "author": "WaitWhat",
+      "feed_url": "https://rss.art19.com/masters-of-scale"
+    }
+  ]
+}

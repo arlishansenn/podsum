@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.local.podsum-transcriber</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/admin/Library/Application Support/Podsum/outputs/podcast_downloader.py</string>
+    <string>--feeds-only</string>
+    <string>--skip-download</string>
+    <string>--transcribe</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/admin/Library/Logs/podsum-transcriber.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/admin/Library/Logs/podsum-transcriber.err.log</string>
+</dict>
+</plist>

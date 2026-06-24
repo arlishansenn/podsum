@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.local.podsum</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/admin/Library/Application Support/Podsum/outputs/podsum.py</string>
+    <string>run-once</string>
+    <string>--cleanup</string>
+    <string>--audio-retention-days</string>
+    <string>14</string>
+    <string>--transcript-retention-days</string>
+    <string>90</string>
+    <string>--untranscribed-audio-retention-days</string>
+    <string>30</string>
+    <string>--bundle-retention-days</string>
+    <string>90</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>8</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/admin/Library/Logs/podsum.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/admin/Library/Logs/podsum.err.log</string>
+</dict>
+</plist>
