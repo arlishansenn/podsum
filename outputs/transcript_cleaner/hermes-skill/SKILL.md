@@ -1,6 +1,6 @@
 ---
 name: transcript-cleaner
-description: Cleans ASR or Whisper Markdown transcripts, removes fillers and several repetition patterns, and generates cleaned Markdown, EPUB, and a JSON audit report. Use when the user asks to clean a transcript, remove repeated speech or ASR loops, merge repeated Chinese prefixes, or create a readable full-transcript EPUB.
+description: Cleans non-semantic repetition from Chinese ASR or Whisper Markdown transcripts and generates cleaned Markdown, EPUB, and a JSON audit report. Use when the user asks to remove speech restarts, stutters, ASR loops, repeated sentence blocks, or create a readable full-transcript EPUB.
 requires:
   bins: python3
 ---
@@ -37,9 +37,9 @@ Optional arguments:
 4. Run the wrapper once. Do not reimplement cleaning with ad hoc replacements.
 5. Read the generated `.report.json`.
 6. Confirm all three reported output paths exist.
-7. Report character counts, rule hit counts, and output paths to the user.
-8. Mention any `shared_prefix_candidate` entries because they were deliberately
-   reported without changing the text.
+7. Check `residual_patterns`; report every remaining short-gap candidate.
+8. Separate edits with `auto_applied: true` from `report_only: true`.
+9. Report character counts, rule hit counts, candidates, and output paths.
 
 ## Outputs
 
@@ -56,29 +56,37 @@ individual edits, and SHA-256 hashes.
 
 ## Cleaning Model
 
-The cleaner applies these operations in order:
+The cleaner removes high-confidence non-semantic repetition and preserves
+deliberate emphasis, contrast, progression, teaching restatement, and natural
+topic-word recurrence.
 
-1. Remove fillers and ASR noise.
-2. Remove exact short-gap restarts.
-3. Resolve adjacent exact clauses and prefix extensions.
-4. Merge safe shared-prefix coordination.
-5. Remove high-confidence prefix restarts.
-6. Remove embedded repeated sentence blocks.
-7. Remove adjacent repeated sentence blocks.
+Automatic operations include:
 
-Shared-prefix coordination preserves both distinct endings:
+1. Remove fillers, ASR noise, and word-level stutters.
+2. Remove exact short-gap restarts where `A` has at least 3 Chinese characters
+   and `gap` has fewer than 15 characters. Punctuation counts toward length.
+3. Resolve exact adjacent clauses, prefix extensions, and safe shared prefixes.
+4. Remove embedded and adjacent exact sentence-block loops.
+
+Short-gap deletion also requires a pause/oral filler gap and no new number,
+entity, cause, negation, contrast, or emphasis signal.
+
+Safe shared-prefix coordination preserves both distinct endings:
 
 ```text
 这个系统可以降低成本，这个系统可以提高效率。
 -> 这个系统可以降低成本，提高效率。
 ```
 
-The minimum prefix length is only a candidate threshold. Unsafe candidates stay
-unchanged and appear as `shared_prefix_candidate` in the audit report.
+Unsafe shared prefixes and near-duplicate rewrites stay unchanged and appear as
+`shared_prefix_candidate` or `near_duplicate_candidate`. Remaining ambiguous
+`A + gap + A` patterns appear in `residual_patterns`.
 
 ## Safety
 
 - Keep the source file as the authoritative raw transcript.
 - Do not lower `--min-prefix-chars` below `5` unless the user explicitly asks.
+- Never claim a `report_only` candidate was removed.
+- Treat non-empty `residual_patterns` as review work, not automatic failure.
 - Do not send, publish, or replace another document unless explicitly asked.
 - If the wrapper fails, return its exact stderr and do not claim outputs exist.
