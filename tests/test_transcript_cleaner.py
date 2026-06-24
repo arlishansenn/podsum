@@ -23,6 +23,121 @@ class TranscriptCleanerTest(unittest.TestCase):
         self.assertEqual(cleaned.count("是的。你知道，这周我们看到 Mythos——"), 1)
         self.assertGreater(stats.intra_sentence_gap_chars_removed, 0)
 
+    def test_removes_prd_minimum_short_gap_restart(self) -> None:
+        result = transcript_cleaner.clean_text("这个模型……这个模型其实很强大。")
+        self.assertEqual(result.text, "这个模型其实很强大。\n")
+        self.assertGreater(result.stats.intra_sentence_gap_chars_removed, 0)
+        self.assertTrue(any(edit.type == "short_gap_repeat" for edit in result.edits))
+
+    def test_removes_short_gap_restart_with_oral_connector(self) -> None:
+        result = transcript_cleaner.clean_text("人工智能，嗯那个，人工智能正在改变世界。")
+        self.assertEqual(result.text, "人工智能正在改变世界。\n")
+        self.assertGreater(result.stats.intra_sentence_gap_chars_removed, 0)
+
+    def test_does_not_remove_short_gap_restart_when_unit_has_less_than_three_chinese_chars(self) -> None:
+        text = "我说……我说完了。"
+        result = transcript_cleaner.clean_text(text)
+        self.assertEqual(result.text, text + "\n")
+        self.assertEqual(result.stats.intra_sentence_gap_chars_removed, 0)
+
+    def test_does_not_remove_short_gap_restart_when_gap_reaches_fifteen_chars(self) -> None:
+        text = "这个模型，嗯嗯嗯嗯嗯嗯嗯嗯嗯嗯嗯嗯嗯，这个模型其实很强大。"
+        result = transcript_cleaner.clean_text(text)
+        self.assertEqual(result.text, text + "\n")
+        self.assertEqual(result.stats.intra_sentence_gap_chars_removed, 0)
+
+    def test_does_not_remove_short_gap_restart_with_semantic_protection_signal(self) -> None:
+        cases = [
+            "这个模型，2024年，这个模型其实很强大。",
+            "这个模型，嗯，这个模型不是最终版本。",
+            "这个模型，因此，这个模型需要重新评估。",
+            "这个模型，但是，这个模型仍然值得关注。",
+        ]
+        for text in cases:
+            with self.subTest(text=text):
+                result = transcript_cleaner.clean_text(text)
+                self.assertEqual(result.text, text + "\n")
+                self.assertEqual(result.stats.intra_sentence_gap_chars_removed, 0)
+
+    def test_does_not_remove_emphasis_short_repetition(self) -> None:
+        text = "很重要，很重要，真的很重要。"
+        result = transcript_cleaner.clean_text(text)
+        self.assertEqual(result.text, text + "\n")
+        self.assertEqual(result.stats.intra_sentence_gap_chars_removed, 0)
+
+    def test_removes_single_character_word_stutter(self) -> None:
+        cases = [
+            ("我我我觉得这件事很重要。", "我觉得这件事很重要。\n"),
+            ("他他他说的对。", "他说的对。\n"),
+        ]
+        for text, expected in cases:
+            with self.subTest(text=text):
+                result = transcript_cleaner.clean_text(text)
+                self.assertEqual(result.text, expected)
+                self.assertGreater(result.stats.word_stutter_chars_removed, 0)
+                self.assertTrue(any(edit.type == "word_stutter" for edit in result.edits))
+
+    def test_removes_short_word_stutter(self) -> None:
+        result = transcript_cleaner.clean_text("真的真的真的太好了。")
+        self.assertEqual(result.text, "真的太好了。\n")
+        self.assertEqual(result.stats.word_stutter_chars_removed, 4)
+        self.assertTrue(any(edit.type == "word_stutter" for edit in result.edits))
+
+    def test_keeps_normal_reduplicated_words(self) -> None:
+        text = "刚刚下课，星星渐渐亮了，妈妈回来了。"
+        result = transcript_cleaner.clean_text(text)
+        self.assertEqual(result.text, text + "\n")
+        self.assertEqual(result.stats.word_stutter_chars_removed, 0)
+        self.assertFalse(any(edit.type == "word_stutter" for edit in result.edits))
+
+    def test_scans_no_residual_short_gap_repeats_after_cleaning(self) -> None:
+        result = transcript_cleaner.clean_text("这个模型……这个模型其实很强大。")
+        self.assertEqual(transcript_cleaner.scan_residual_short_gap_repeats(result.text), [])
+        self.assertEqual(result.residual_patterns, [])
+
+    def test_scans_deliberate_residual_short_gap_repeat(self) -> None:
+        residuals = transcript_cleaner.scan_residual_short_gap_repeats(
+            "这个模型……这个模型其实很强大。\n"
+        )
+        self.assertEqual(len(residuals), 1)
+        self.assertEqual(residuals[0].type, "residual_short_gap_repeat")
+        self.assertEqual(residuals[0].line, 1)
+        self.assertEqual(residuals[0].text, "这个模型……这个模型")
+
+    def test_residual_scan_ignores_semantic_repetition(self) -> None:
+        cases = [
+            "我爱你，我爱他，我爱大家。\n",
+            "很重要，很重要，真的很重要。\n",
+            "这个模型，但是，这个模型仍然值得关注。\n",
+        ]
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertEqual(transcript_cleaner.scan_residual_short_gap_repeats(text), [])
+
+    def test_cli_report_includes_residual_patterns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.md"
+            output = root / "out"
+            source.write_text("# 测试文字稿\n\n这个模型……这个模型其实很强大。\n", encoding="utf-8")
+            process = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "transcript_cleaner",
+                    str(source),
+                    "--output-dir",
+                    str(output),
+                ],
+                cwd=str(ROOT / "outputs"),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(process.returncode, 0, process.stderr + process.stdout)
+            data = json.loads((output / "source_cleaned.report.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["residual_patterns"], [])
+
     def test_removes_embedded_sentence_block_repeat(self) -> None:
         cleaned, stats = transcript_cleaner.clean_text("有人说：“A。B。C。A。B。C。”然后继续。")
         self.assertEqual(cleaned, "有人说：“A。B。C。”然后继续。\n")
@@ -95,6 +210,98 @@ class TranscriptCleanerTest(unittest.TestCase):
             "如今的瓶颈是 AI——考虑到执行这些操作需要很长时间。\n",
         )
         self.assertTrue(any(edit.type == "prefix_extension" for edit in result.edits))
+
+    def test_edit_report_distinguishes_auto_applied_and_report_only(self) -> None:
+        text = "这个系统可以降低成本，这个系统可以提高效率。\n或者我们想改变它，或者我们想要其他定义。"
+        result = transcript_cleaner.clean_text(text)
+        automatic = next(edit for edit in result.edits if edit.type == "shared_prefix_coordination")
+        report_only = next(edit for edit in result.edits if edit.type == "shared_prefix_candidate")
+        self.assertTrue(automatic.auto_applied)
+        self.assertFalse(automatic.report_only)
+        self.assertFalse(report_only.auto_applied)
+        self.assertTrue(report_only.report_only)
+        self.assertEqual(result.stats.rule_hits["shared_prefix_coordination"], 1)
+        self.assertEqual(result.stats.rule_hits["shared_prefix_candidate"], 1)
+        self.assertGreater(result.stats.rule_char_changes["shared_prefix_coordination"], 0)
+        self.assertEqual(result.stats.rule_char_changes["shared_prefix_candidate"], 0)
+
+    def test_cli_report_includes_edit_action_and_rule_aggregation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.md"
+            output = root / "out"
+            source.write_text(
+                "# 测试文字稿\n\n这个系统可以降低成本，这个系统可以提高效率。\n",
+                encoding="utf-8",
+            )
+            process = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "transcript_cleaner",
+                    str(source),
+                    "--output-dir",
+                    str(output),
+                ],
+                cwd=str(ROOT / "outputs"),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(process.returncode, 0, process.stderr + process.stdout)
+            data = json.loads((output / "source_cleaned.report.json").read_text(encoding="utf-8"))
+            self.assertTrue(data["edits"][0]["auto_applied"])
+            self.assertFalse(data["edits"][0]["report_only"])
+            self.assertEqual(data["stats"]["rule_hits"]["shared_prefix_coordination"], 1)
+            self.assertGreater(data["stats"]["rule_char_changes"]["shared_prefix_coordination"], 0)
+
+    def test_reports_near_duplicate_sentences_without_modifying_text(self) -> None:
+        text = "这个模型很强大。这个模型非常强大。"
+        result = transcript_cleaner.clean_text(text)
+        candidates = [edit for edit in result.edits if edit.type == "near_duplicate_candidate"]
+        self.assertEqual(result.text, text + "\n")
+        self.assertEqual(len(candidates), 1)
+        self.assertFalse(candidates[0].auto_applied)
+        self.assertTrue(candidates[0].report_only)
+        self.assertEqual(result.stats.rule_hits["near_duplicate_candidate"], 1)
+        self.assertEqual(result.stats.rule_char_changes["near_duplicate_candidate"], 0)
+
+    def test_exact_duplicate_sentence_is_auto_removed_not_reported_as_near_duplicate(self) -> None:
+        result = transcript_cleaner.clean_text("这个模型很强大。这个模型很强大。")
+        self.assertEqual(result.text, "这个模型很强大。\n")
+        self.assertTrue(any(edit.auto_applied for edit in result.edits))
+        self.assertFalse(any(edit.type == "near_duplicate_candidate" for edit in result.edits))
+
+    def test_cli_report_includes_near_duplicate_as_report_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.md"
+            output = root / "out"
+            source.write_text(
+                "# 测试文字稿\n\n这个模型很强大。这个模型非常强大。\n",
+                encoding="utf-8",
+            )
+            process = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "transcript_cleaner",
+                    str(source),
+                    "--output-dir",
+                    str(output),
+                ],
+                cwd=str(ROOT / "outputs"),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(process.returncode, 0, process.stderr + process.stdout)
+            data = json.loads((output / "source_cleaned.report.json").read_text(encoding="utf-8"))
+            candidate = next(edit for edit in data["edits"] if edit["type"] == "near_duplicate_candidate")
+            self.assertFalse(candidate["auto_applied"])
+            self.assertTrue(candidate["report_only"])
+            self.assertEqual(data["stats"]["rule_hits"]["near_duplicate_candidate"], 1)
+            self.assertEqual(data["stats"]["rule_char_changes"]["near_duplicate_candidate"], 0)
 
     def test_cli_writes_markdown_epub_and_edit_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

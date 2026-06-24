@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from difflib import SequenceMatcher
 from typing import Any, Iterator, List, Sequence, Tuple
 
 
@@ -52,9 +53,12 @@ class CleaningStats:
     removed_sentence_units: int = 0
     repeated_blocks_removed: int = 0
     intra_sentence_gap_chars_removed: int = 0
+    word_stutter_chars_removed: int = 0
     shared_prefix_merges: int = 0
     prefix_restarts_removed: int = 0
     adjacent_clause_repeats: int = 0
+    rule_hits: dict[str, int] = field(default_factory=dict)
+    rule_char_changes: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -67,6 +71,8 @@ class Edit:
     after: str
     confidence: float
     line: int
+    auto_applied: bool
+    report_only: bool
 
     def to_dict(self) -> dict[str, Any]:
         value = asdict(self)
@@ -76,10 +82,28 @@ class Edit:
 
 
 @dataclass
+class ResidualPattern:
+    type: str
+    text: str
+    unit: str
+    gap: str
+    confidence: float
+    line: int
+    start: int
+    end: int
+
+    def to_dict(self) -> dict[str, Any]:
+        value = asdict(self)
+        value["text"] = summarize_edit_text(self.text)
+        return value
+
+
+@dataclass
 class CleaningResult:
     text: str
     stats: CleaningStats
     edits: List[Edit]
+    residual_patterns: List[ResidualPattern]
 
     def __iter__(self) -> Iterator[Any]:
         yield self.text
@@ -91,6 +115,21 @@ def summarize_edit_text(text: str, limit: int = 240) -> str:
     if len(value) <= limit:
         return value
     return value[:limit] + "...[truncated]"
+
+
+def count_rule_hits(edits: Sequence[Edit]) -> dict[str, int]:
+    hits: dict[str, int] = {}
+    for edit in edits:
+        hits[edit.type] = hits.get(edit.type, 0) + 1
+    return hits
+
+
+def count_rule_char_changes(edits: Sequence[Edit]) -> dict[str, int]:
+    changes: dict[str, int] = {}
+    for edit in edits:
+        current = changes.get(edit.type, 0)
+        changes[edit.type] = current + abs(len(edit.before) - len(edit.after))
+    return changes
 
 
 def remove_fillers_and_normalize(text: str) -> str:
@@ -147,31 +186,120 @@ def split_sentence_units(paragraph: str) -> List[str]:
     return units
 
 
-def collapse_intra_sentence_short_gap_repeats(
-    paragraph: str,
-    *,
-    min_match_len: int = 20,
-    max_gap: int = 10,
-) -> Tuple[str, int]:
+NORMAL_REDUPLICATION_WORDS = frozenset({"刚刚", "渐渐", "星星", "妈妈"})
+ORAL_GAP_TOKENS = ("嗯", "呃", "啊", "那个", "这个", "就是", "怎么说", "是吧", "对吧")
+SEMANTIC_PROTECTION_RE = re.compile(
+    r"(?:\d|[０-９]|因为|所以|因此|但是|但|不过|然而|可是|而是|不是|没有|不会|不能|不再|并非)"
+)
+EMPHASIS_CONTINUATION_RE = re.compile(r"^[，,、。！？!?；;：:\s]*(?:真的|确实|非常|特别|尤其|太|很)")
+NEAR_DUPLICATE_WEAK_WORD_RE = re.compile(r"(?:非常|很|特别|确实|其实|基本上|事实上|真的|还是|比较|更加|更)")
+GAP_PAUSE_CHARS = set(" \t\r\n，,、。！？!?；;：:…—-~～“”\"'‘’（）()【】[]《》")
+
+
+def is_plain_clause_separator_gap(gap: str) -> bool:
+    return gap in {"，", ",", "、", "；", ";"}
+
+
+def is_allowed_restart_gap(gap: str) -> bool:
+    if len(gap) >= 15:
+        return False
+    if is_plain_clause_separator_gap(gap):
+        return False
+    value = "".join(char for char in gap if char not in GAP_PAUSE_CHARS)
+    while value:
+        matched = False
+        for token in sorted(ORAL_GAP_TOKENS, key=len, reverse=True):
+            if value.startswith(token):
+                value = value[len(token) :]
+                matched = True
+                break
+        if not matched:
+            return False
+    return True
+
+
+def has_semantic_protection_signal(text: str) -> bool:
+    return bool(SEMANTIC_PROTECTION_RE.search(text))
+
+
+def is_restart_unit(unit: str) -> bool:
+    if count_cjk(unit) < 3:
+        return False
+    if len(set(unit)) <= 2:
+        return False
+    if not re.search(r"[\u3400-\u9fffA-Za-z]", unit):
+        return False
+    return not re.fullmatch(r"[\s\d，。！？；：、\"“”「」『』\-,.…— ]+", unit)
+
+
+def has_emphasis_continuation(tail: str) -> bool:
+    return bool(EMPHASIS_CONTINUATION_RE.match(tail))
+
+
+def collapse_word_stutters(paragraph: str) -> Tuple[str, int]:
     removed = 0
     value = paragraph
+    if value.lstrip().startswith("#"):
+        return value, removed
+
+    def replace_single(match: re.Match[str]) -> str:
+        nonlocal removed
+        unit = match.group(1)
+        if unit in ORAL_GAP_TOKENS:
+            return match.group(0)
+        removed += len(match.group(0)) - len(unit)
+        return unit
+
+    value = re.sub(r"([\u3400-\u9fff])\1{2,}", replace_single, value)
+
+    for unit_len in range(4, 1, -1):
+        pattern = re.compile(rf"([\u3400-\u9fff]{{{unit_len}}})(?:\1){{2,}}")
+
+        def replace(match: re.Match[str]) -> str:
+            nonlocal removed
+            unit = match.group(1)
+            if unit in NORMAL_REDUPLICATION_WORDS:
+                return match.group(0)
+            if len(set(unit)) == 1 and unit[0] in ORAL_GAP_TOKENS:
+                return match.group(0)
+            removed += len(match.group(0)) - len(unit)
+            return unit
+
+        value = pattern.sub(replace, value)
+    return value, removed
+
+
+def collapse_intra_sentence_short_gap_repeats(paragraph: str) -> Tuple[str, int]:
+    removed = 0
+    value = paragraph
+    if value.lstrip().startswith("#"):
+        return value, removed
     for _ in range(10):
         changed = False
-        for match_len in range(min(50, len(value) // 2), min_match_len - 1, -1):
+        max_match_len = min(80, len(value) // 2)
+        for match_len in range(max_match_len, 2, -1):
             for index in range(0, len(value) - match_len):
-                prefix = value[index : index + match_len]
-                if re.match(r"^[\s\d，。！？；：、\"“”「」『』\-,.…— ]+$", prefix):
+                unit = value[index : index + match_len]
+                if not is_restart_unit(unit):
                     continue
-                if len(set(prefix)) <= 2:
-                    continue
-                rest = value[index + match_len :]
-                for gap in range(0, max_gap + 1):
-                    if index + match_len + gap + match_len > len(value):
+                rest_start = index + match_len
+                for gap_len in range(0, 15):
+                    second_start = rest_start + gap_len
+                    second_end = second_start + match_len
+                    if second_end > len(value):
                         break
-                    if rest[gap : gap + match_len] != prefix:
+                    gap = value[rest_start:second_start]
+                    if value[second_start:second_end] != unit:
                         continue
-                    value = value[: index + match_len] + value[index + match_len + gap + match_len :]
-                    removed += gap + match_len
+                    if not is_allowed_restart_gap(gap):
+                        continue
+                    tail = value[second_end:]
+                    if has_semantic_protection_signal(gap) or has_semantic_protection_signal(tail):
+                        continue
+                    if has_emphasis_continuation(tail):
+                        continue
+                    value = value[:index] + value[second_start:]
+                    removed += len(unit) + len(gap)
                     changed = True
                     break
                 if changed:
@@ -183,8 +311,107 @@ def collapse_intra_sentence_short_gap_repeats(
     return value, removed
 
 
+def find_residual_short_gap_repeats_in_line(line: str, line_no: int) -> List[ResidualPattern]:
+    if line.lstrip().startswith("#"):
+        return []
+    residuals: List[ResidualPattern] = []
+    max_match_len = min(80, len(line) // 2)
+    occupied_until = -1
+    for index in range(0, len(line)):
+        if index < occupied_until:
+            continue
+        for match_len in range(max_match_len, 2, -1):
+            rest_start = index + match_len
+            if rest_start > len(line):
+                continue
+            unit = line[index:rest_start]
+            if not is_restart_unit(unit):
+                continue
+            matched: ResidualPattern | None = None
+            for gap_len in range(0, 15):
+                second_start = rest_start + gap_len
+                second_end = second_start + match_len
+                if second_end > len(line):
+                    break
+                gap = line[rest_start:second_start]
+                if line[second_start:second_end] != unit:
+                    continue
+                if not is_allowed_restart_gap(gap):
+                    continue
+                tail = line[second_end:]
+                if has_semantic_protection_signal(gap) or has_semantic_protection_signal(tail):
+                    continue
+                if has_emphasis_continuation(tail):
+                    continue
+                matched = ResidualPattern(
+                    "residual_short_gap_repeat",
+                    line[index:second_end],
+                    unit,
+                    gap,
+                    0.99,
+                    line_no,
+                    index,
+                    second_end,
+                )
+                break
+            if matched is not None:
+                residuals.append(matched)
+                occupied_until = matched.end
+                break
+    return residuals
+
+
+def scan_residual_short_gap_repeats(text: str) -> List[ResidualPattern]:
+    residuals: List[ResidualPattern] = []
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        residuals.extend(find_residual_short_gap_repeats_in_line(line, line_no))
+    return residuals
+
+
 def count_cjk(text: str) -> int:
     return len(re.findall(r"[\u3400-\u9fff]", text))
+
+
+def normalize_near_duplicate_text(text: str) -> str:
+    value = normalize_sentence(text, loose=True)
+    value = NEAR_DUPLICATE_WEAK_WORD_RE.sub("", value)
+    return value
+
+
+def sequence_similarity(first: str, second: str) -> float:
+    return SequenceMatcher(None, first, second).ratio()
+
+
+def is_near_duplicate_pair(first: str, second: str, min_cjk: int, min_similarity: float) -> bool:
+    first_base = normalize_sentence(first, loose=True)
+    second_base = normalize_sentence(second, loose=True)
+    if not first_base or not second_base:
+        return False
+    if first_base == second_base:
+        return False
+    first_norm = normalize_near_duplicate_text(first)
+    second_norm = normalize_near_duplicate_text(second)
+    if count_cjk(first_norm) < min_cjk or count_cjk(second_norm) < min_cjk:
+        return False
+    similarity = sequence_similarity(first_norm, second_norm)
+    return similarity >= min_similarity
+
+
+def report_near_duplicate_sentence_candidates(paragraph: str, line_no: int) -> List[Edit]:
+    if paragraph.lstrip().startswith("#"):
+        return []
+    units = split_sentence_units(paragraph)
+    edits: List[Edit] = []
+    for index in range(0, len(units) - 1):
+        first = units[index]
+        second = units[index + 1]
+        if not first.strip() or not second.strip():
+            continue
+        if not is_near_duplicate_pair(first, second, 6, 0.78):
+            continue
+        before = first + second
+        edits.append(Edit("near_duplicate_candidate", before, before, 0.6, line_no, False, True))
+    return edits
 
 
 def longest_common_prefix(first: str, second: str) -> str:
@@ -262,23 +489,27 @@ def collapse_shared_prefix_clauses(
         left_body = left.strip()
         right_body = right.strip()
         before = left + separator + right
+        following = "".join(parts[index + 3 : index + 5])
         if left_body == right_body:
+            if has_emphasis_continuation(following):
+                index += 2
+                continue
             parts[index + 1] = ""
             parts[index + 2] = ""
-            edits.append(Edit("adjacent_clause_repeat", before, parts[index], 1.0, line_no))
+            edits.append(Edit("adjacent_clause_repeat", before, parts[index], 1.0, line_no, True, False))
             clause_repeats += 1
             continue
         if right_body.startswith(left_body) and len(right_body) - len(left_body) >= 2:
             parts[index] = left_leading + right_body
             parts[index + 1] = ""
             parts[index + 2] = ""
-            edits.append(Edit("prefix_extension", before, parts[index], 1.0, line_no))
+            edits.append(Edit("prefix_extension", before, parts[index], 1.0, line_no, True, False))
             clause_repeats += 1
             continue
         if left_body.startswith(right_body) and len(left_body) - len(right_body) >= 2:
             parts[index + 1] = ""
             parts[index + 2] = ""
-            edits.append(Edit("prefix_extension", before, parts[index], 1.0, line_no))
+            edits.append(Edit("prefix_extension", before, parts[index], 1.0, line_no, True, False))
             clause_repeats += 1
             continue
 
@@ -299,13 +530,13 @@ def collapse_shared_prefix_clauses(
             parts[index + 1] = ""
             parts[index + 2] = ""
             after = parts[index]
-            edits.append(Edit("prefix_restart", before, after, 0.95, line_no))
+            edits.append(Edit("prefix_restart", before, after, 0.95, line_no, True, False))
             restarts += 1
             continue
 
         safe_prefix = safe_coordination_prefix(prefix)
         if not safe_prefix:
-            edits.append(Edit("shared_prefix_candidate", before, before, 0.5, line_no))
+            edits.append(Edit("shared_prefix_candidate", before, before, 0.5, line_no, False, True))
             index += 2
             continue
         if safe_prefix != prefix:
@@ -314,7 +545,7 @@ def collapse_shared_prefix_clauses(
             right_tail = right_body[len(prefix) :]
         parts[index + 2] = right_leading + right_tail.lstrip()
         after = parts[index] + separator + parts[index + 2]
-        edits.append(Edit("shared_prefix_coordination", before, after, 0.99, line_no))
+        edits.append(Edit("shared_prefix_coordination", before, after, 0.99, line_no, True, False))
         merges += 1
         index += 2
 
@@ -407,6 +638,7 @@ def collapse_adjacent_duplicate_blocks(
 
 def dedupe_paragraph(paragraph: str) -> Tuple[str, int, int, int]:
     original = paragraph
+    paragraph, _word_stutter_removed = collapse_word_stutters(paragraph)
     paragraph, gap_removed = collapse_intra_sentence_short_gap_repeats(paragraph)
     paragraph, embedded_units, embedded_blocks = collapse_exact_embedded_sentence_blocks(paragraph)
     units = split_sentence_units(paragraph)
@@ -421,13 +653,14 @@ def clean_text(text: str, *, min_prefix_cjk: int = 5) -> CleaningResult:
     normalized = remove_fillers_and_normalize(text)
     edits: List[Edit] = []
     if normalized != text:
-        edits.append(Edit("fillers_and_noise", text, normalized, 1.0, 0))
+        edits.append(Edit("fillers_and_noise", text, normalized, 1.0, 0, True, False))
     text = normalized
     output: List[str] = []
     paragraphs_changed = 0
     removed_units = 0
     removed_blocks = 0
     gap_removed = 0
+    word_stutter_removed = 0
     shared_prefix_merges = 0
     prefix_restarts = 0
     adjacent_clause_repeats = 0
@@ -439,9 +672,12 @@ def clean_text(text: str, *, min_prefix_cjk: int = 5) -> CleaningResult:
         elif line.endswith("\n"):
             body, newline = line[:-1], "\n"
         before = body
-        after_gap, line_gap_removed = collapse_intra_sentence_short_gap_repeats(body)
-        if after_gap != body:
-            edits.append(Edit("short_gap_repeat", body, after_gap, 0.99, line_no))
+        after_word_stutter, line_word_stutter_removed = collapse_word_stutters(body)
+        if after_word_stutter != body:
+            edits.append(Edit("word_stutter", body, after_word_stutter, 1.0, line_no, True, False))
+        after_gap, line_gap_removed = collapse_intra_sentence_short_gap_repeats(after_word_stutter)
+        if after_gap != after_word_stutter:
+            edits.append(Edit("short_gap_repeat", after_word_stutter, after_gap, 0.99, line_no, True, False))
         after_prefix, prefix_edits, line_merges, line_restarts, line_clause_repeats = collapse_shared_prefix_clauses(
             after_gap,
             min_prefix_cjk=min_prefix_cjk,
@@ -453,14 +689,16 @@ def clean_text(text: str, *, min_prefix_cjk: int = 5) -> CleaningResult:
         adjacent_clause_repeats += line_clause_repeats
         after_embedded, embedded_units, embedded_blocks = collapse_exact_embedded_sentence_blocks(after_prefix)
         if after_embedded != after_prefix:
-            edits.append(Edit("embedded_sentence_block", after_prefix, after_embedded, 0.99, line_no))
+            edits.append(Edit("embedded_sentence_block", after_prefix, after_embedded, 0.99, line_no, True, False))
         units, adjacent_units, adjacent_blocks = collapse_adjacent_duplicate_blocks(split_sentence_units(after_embedded))
         body = "".join(units)
         if body != after_embedded:
-            edits.append(Edit("adjacent_sentence_block", after_embedded, body, 0.99, line_no))
+            edits.append(Edit("adjacent_sentence_block", after_embedded, body, 0.99, line_no, True, False))
+        edits.extend(report_near_duplicate_sentence_candidates(body, line_no))
         output.append(body + newline)
         paragraphs_changed += int(body != before)
         gap_removed += line_gap_removed
+        word_stutter_removed += line_word_stutter_removed
         removed_units += embedded_units + adjacent_units
         removed_blocks += embedded_blocks + adjacent_blocks
     cleaned = "".join(output).strip() + "\n"
@@ -472,8 +710,12 @@ def clean_text(text: str, *, min_prefix_cjk: int = 5) -> CleaningResult:
         removed_sentence_units=removed_units,
         repeated_blocks_removed=removed_blocks,
         intra_sentence_gap_chars_removed=gap_removed,
+        word_stutter_chars_removed=word_stutter_removed,
         shared_prefix_merges=shared_prefix_merges,
         prefix_restarts_removed=prefix_restarts,
         adjacent_clause_repeats=adjacent_clause_repeats,
+        rule_hits=count_rule_hits(edits),
+        rule_char_changes=count_rule_char_changes(edits),
     )
-    return CleaningResult(cleaned, stats, edits)
+    residual_patterns = scan_residual_short_gap_repeats(cleaned)
+    return CleaningResult(cleaned, stats, edits, residual_patterns)

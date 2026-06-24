@@ -44,6 +44,7 @@ def run(args: argparse.Namespace) -> int:
         "min_prefix_chars": args.min_prefix_chars,
         "stats": result.stats.to_dict(),
         "edits": [edit.to_dict() for edit in result.edits],
+        "residual_patterns": [residual.to_dict() for residual in result.residual_patterns],
         "sha256": {
             "source": hashlib.sha256(source.read_bytes()).hexdigest(),
             "markdown": hashlib.sha256(markdown_path.read_bytes()).hexdigest(),
