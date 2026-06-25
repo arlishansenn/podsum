@@ -831,23 +831,96 @@ def collapse_exact_embedded_sentence_blocks(
     removed_units = 0
     removed_blocks = 0
     value = paragraph
+
+    sentence_end_chars = {"。", "！", "？", "!", "?"}
+
+    def skip_inline_spaces(text: str, index: int) -> int:
+        while index < len(text) and text[index] in {" ", "\t"}:
+            index += 1
+        return index
+
+    def build_block_end_index(text: str) -> Tuple[List[List[int | None]], List[int]]:
+        unit_end_by_start: List[int | None] = [None] * (len(text) + 1)
+        valid_starts: List[int] = []
+        segment_start = 0
+        index = 0
+        while index < len(text):
+            char = text[index]
+            if char == "\n":
+                segment_start = index + 1
+                index += 1
+                continue
+            if char in sentence_end_chars:
+                sentence_end_start = index
+                while index < len(text) and text[index] in sentence_end_chars:
+                    index += 1
+                sentence_end = index
+            elif char == "…":
+                sentence_end_start = index
+                while index < len(text) and text[index] == "…":
+                    index += 1
+                sentence_end = index
+                if sentence_end - sentence_end_start < 2:
+                    segment_start = sentence_end
+                    continue
+            else:
+                index += 1
+                continue
+
+            first_start = max(segment_start, sentence_end_start - 240)
+            for start in range(first_start, sentence_end_start):
+                unit_end_by_start[start] = sentence_end
+                valid_starts.append(start)
+            segment_start = sentence_end
+
+        block_end_by_len: List[List[int | None]] = [[None] * (len(text) + 1)]
+        block_end_by_len.append(unit_end_by_start)
+        for block_len in range(2, max_block_sentences + 1):
+            previous = block_end_by_len[block_len - 1]
+            current: List[int | None] = [None] * (len(text) + 1)
+            for start in valid_starts:
+                previous_end = previous[start]
+                if previous_end is None or previous_end >= len(unit_end_by_start):
+                    continue
+                current[start] = unit_end_by_start[previous_end]
+            block_end_by_len.append(current)
+        return block_end_by_len, valid_starts
+
     for _ in range(20):
         changed = False
+        block_end_by_len, valid_starts = build_block_end_index(value)
         for block_len in range(max_block_sentences, min_block_sentences - 1, -1):
-            pattern = re.compile(rf"((?:{REGEX_SENTENCE_UNIT}){{{block_len}}})(?:[ \t]*\1)+")
-
-            def replace(match: re.Match[str]) -> str:
-                nonlocal removed_units, removed_blocks, changed
-                full = match.group(0)
-                block = match.group(1)
-                copies = max(1, full.count(block))
-                if copies > 1:
-                    removed_units += (copies - 1) * block_len
-                    removed_blocks += copies - 1
-                    changed = True
-                return block
-
-            value = pattern.sub(replace, value)
+            replacements: List[Tuple[int, int, str, int]] = []
+            occupied_until = -1
+            for block_start in valid_starts:
+                if block_start < occupied_until:
+                    continue
+                block_end = block_end_by_len[block_len][block_start]
+                if block_end is None:
+                    continue
+                block = value[block_start:block_end]
+                cursor = skip_inline_spaces(value, block_end)
+                copies = 1
+                while value.startswith(block, cursor):
+                    copies += 1
+                    cursor = skip_inline_spaces(value, cursor + len(block))
+                if copies < 2:
+                    continue
+                replacements.append((block_start, cursor, block, copies))
+                occupied_until = cursor
+            if not replacements:
+                continue
+            parts: List[str] = []
+            cursor = 0
+            for start, end, block, copies in replacements:
+                parts.append(value[cursor:start])
+                parts.append(block)
+                cursor = end
+                removed_units += (copies - 1) * block_len
+                removed_blocks += copies - 1
+            parts.append(value[cursor:])
+            value = "".join(parts)
+            changed = True
         if not changed:
             break
     return value, removed_units, removed_blocks
