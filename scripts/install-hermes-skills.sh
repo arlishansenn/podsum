@@ -27,16 +27,16 @@ sync_skill() {
 }
 
 sync_skill \
-  "$PROJECT_ROOT/skills/media/transcript-cleaner" \
-  "$HERMES_HOME/skills/media/transcript-cleaner"
-
-sync_skill \
-  "$PROJECT_ROOT/skills/markdown-to-epub-converter" \
-  "$HERMES_HOME/skills/markdown-to-epub-converter"
+  "$PROJECT_ROOT/skills/media/make-markdown-readable" \
+  "$HERMES_HOME/skills/media/make-markdown-readable"
 
 sync_skill \
   "$PROJECT_ROOT/skills/social-media/hermes-feishu-file-send" \
   "$HERMES_HOME/skills/social-media/hermes-feishu-file-send"
+
+rm -rf "$HERMES_HOME/skills/markdown-to-epub-converter" "$HERMES_HOME/skills/media/transcript-cleaner"
+echo "Removed obsolete: $HERMES_HOME/skills/markdown-to-epub-converter"
+echo "Removed obsolete: $HERMES_HOME/skills/media/transcript-cleaner"
 
 if [[ "$RESTART_GATEWAY" == "1" ]]; then
   "$HOME/.local/bin/hermes" gateway restart

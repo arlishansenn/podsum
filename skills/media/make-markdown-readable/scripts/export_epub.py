@@ -12,20 +12,28 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
-# 从当前脚本向上查找仓库根目录，并把 outputs 加入导入路径
-_current_path = Path(__file__).resolve()
-_outputs_dir = None
-for _parent in _current_path.parents:
-    _candidate = _parent / "outputs"
-    if _candidate.is_dir():
-        _outputs_dir = _candidate
-        break
+DEFAULT_PROJECT_ROOT = Path("/Users/admin/Documents/Codex/podsum/outputs")
 
+
+# 显式环境变量最高优先级；否则开发态找仓库 outputs，部署态回落到固定路径
+_current_path = Path(__file__).resolve()
+_env_value = os.environ.get("PODSUM_PROJECT_ROOT")
+_outputs_dir = Path(_env_value).expanduser() if _env_value else None
 if _outputs_dir is None:
-    raise RuntimeError("Could not locate repository outputs directory")
+    for _parent in _current_path.parents:
+        _candidate = _parent / "outputs"
+        if _candidate.is_dir():
+            _outputs_dir = _candidate
+            break
+if _outputs_dir is None and DEFAULT_PROJECT_ROOT.is_dir():
+    _outputs_dir = DEFAULT_PROJECT_ROOT
+
+if _outputs_dir is None or not _outputs_dir.is_dir():
+    raise RuntimeError("Could not locate Podsum outputs directory")
 
 if str(_outputs_dir) not in sys.path:
     sys.path.insert(0, str(_outputs_dir))

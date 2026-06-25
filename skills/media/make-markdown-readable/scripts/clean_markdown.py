@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the deployed Transcript Cleaner from a stable Hermes skill entrypoint."""
+"""Clean Markdown into a readable artifact from a stable Hermes skill entrypoint."""
 
 from __future__ import annotations
 
