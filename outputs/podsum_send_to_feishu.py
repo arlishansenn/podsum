@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""Send newly generated Podsum reports to Discord via Hermes."""
+"""经 Hermes 将生成的 Podsum 报告 EPUB 投递到配置的目标（默认 Discord）。
+
+注：文件名 podsum_send_to_feishu.py 为历史原因保留（launchd plist 引用），
+实际投递目标由 --target 决定，传输统一由 podsum_core.delivery 的 Hermes adapter 完成。
+"""
 
 from __future__ import annotations
 
 import argparse
 import datetime as dt
 import hashlib
-import html
 import json
 import re
-import subprocess
 import time
-import uuid
-import zipfile
 from pathlib import Path
 from typing import Any
+
+from podsum_core.delivery import run_hermes_prompt, send_hermes_file
+from podsum_core.epub_converter import create_epub_from_markdown
 
 
 DEFAULT_TRANSCRIPTS_ROOT = Path.home() / "Podcasts/AutoDownloads"
@@ -207,130 +210,12 @@ def markdown_escape(text: str) -> str:
     return text.replace("|", "\\|").replace("\n", " ").strip()
 
 
-def inline_markdown_to_html(text: str) -> str:
-    escaped = html.escape(text, quote=False)
-    escaped = re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
-    escaped = re.sub(r"\[([^\]]+)\]\(#([^)]+)\)", r'<a href="#\2">\1</a>', escaped)
-    return escaped
-
-
-def markdown_to_xhtml(markdown: str) -> str:
-    body: list[str] = []
-    paragraph: list[str] = []
-    in_table = False
-
-    def flush_paragraph() -> None:
-        nonlocal paragraph
-        if paragraph:
-            body.append(f"<p>{inline_markdown_to_html(' '.join(paragraph))}</p>")
-            paragraph = []
-
-    def close_table() -> None:
-        nonlocal in_table
-        if in_table:
-            body.append("</tbody></table>")
-            in_table = False
-
-    for raw_line in markdown.splitlines():
-        line = raw_line.rstrip()
-        stripped = line.strip()
-
-        if not stripped:
-            flush_paragraph()
-            close_table()
-            continue
-
-        anchor_match = re.fullmatch(r'<a id="([^"]+)"></a>', stripped)
-        if anchor_match:
-            flush_paragraph()
-            close_table()
-            body.append(f'<div id="{html.escape(anchor_match.group(1), quote=True)}"></div>')
-            continue
-
-        heading = re.match(r"^(#{1,6})\s+(.+)$", stripped)
-        if heading:
-            flush_paragraph()
-            close_table()
-            level = len(heading.group(1))
-            content = inline_markdown_to_html(heading.group(2))
-            body.append(f"<h{level}>{content}</h{level}>")
-            continue
-
-        if stripped.startswith("|") and stripped.endswith("|"):
-            flush_paragraph()
-            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
-            if all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
-                continue
-            if not in_table:
-                body.append("<table><tbody>")
-                in_table = True
-            row = "".join(f"<td>{inline_markdown_to_html(cell)}</td>" for cell in cells)
-            body.append(f"<tr>{row}</tr>")
-            continue
-
-        close_table()
-        paragraph.append(stripped)
-
-    flush_paragraph()
-    close_table()
-    return "\n".join(body)
-
-
 def write_epub(markdown_path: Path, title: str) -> Path:
     markdown = read_text(markdown_path)
     epub_path = markdown_path.with_suffix(".epub")
-    uid = f"urn:uuid:{uuid.uuid4()}"
-    xhtml_body = markdown_to_xhtml(markdown)
-
-    content_xhtml = f"""<?xml version="1.0" encoding="utf-8"?>
-<!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="zh-CN" lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <title>{html.escape(title)}</title>
-  <style>
-    body {{ font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", sans-serif; line-height: 1.55; }}
-    code {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }}
-    table {{ border-collapse: collapse; width: 100%; }}
-    td {{ border: 1px solid #ddd; padding: 4px 6px; vertical-align: top; }}
-  </style>
-</head>
-<body>
-{xhtml_body}
-</body>
-</html>
-"""
-    container_xml = """<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>
-"""
-    content_opf = f"""<?xml version="1.0" encoding="UTF-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="3.0" xml:lang="zh-CN">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:identifier id="bookid">{uid}</dc:identifier>
-    <dc:title>{html.escape(title)}</dc:title>
-    <dc:language>zh-CN</dc:language>
-    <dc:creator>Podsum</dc:creator>
-    <dc:modified>{dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}</dc:modified>
-  </metadata>
-  <manifest>
-    <item id="content" href="content.xhtml" media-type="application/xhtml+xml"/>
-  </manifest>
-  <spine>
-    <itemref idref="content"/>
-  </spine>
-</package>
-"""
-
-    with zipfile.ZipFile(epub_path, "w") as zf:
-        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
-        zf.writestr("META-INF/container.xml", container_xml, compress_type=zipfile.ZIP_DEFLATED)
-        zf.writestr("OEBPS/content.opf", content_opf, compress_type=zipfile.ZIP_DEFLATED)
-        zf.writestr("OEBPS/content.xhtml", content_xhtml, compress_type=zipfile.ZIP_DEFLATED)
-
+    ok = create_epub_from_markdown(markdown, str(epub_path), title=title)
+    if not ok:
+        raise RuntimeError(f"EPUB 生成失败: {epub_path}")
     return epub_path
 
 
@@ -350,23 +235,15 @@ def hermes_interpretation(args: argparse.Namespace, info: dict[str, Any]) -> str
         episode=info["episode"],
         transcript=transcript,
     )
-    command = [str(args.hermes), "-z", prompt]
-    try:
-        result = subprocess.run(
-            command,
-            cwd=str(args.project_dir),
-            text=True,
-            capture_output=True,
-            timeout=args.hermes_timeout,
-        )
-    except Exception as exc:
-        return f"Hermes 解读失败：{exc}"
-
-    output = (result.stdout or "").strip()
-    if result.returncode != 0:
-        detail = (result.stderr or output or "unknown Hermes error").strip()
-        return f"Hermes 解读失败：{detail}"
-    return output or "Hermes 未返回解读。"
+    ok, value = run_hermes_prompt(
+        str(args.hermes),
+        prompt,
+        cwd=str(args.project_dir),
+        timeout=args.hermes_timeout,
+    )
+    if not ok:
+        return f"Hermes 解读失败：{value}"
+    return value or "Hermes 未返回解读。"
 
 
 def build_bundle(args: argparse.Namespace, pending: list[tuple[Path, str]]) -> tuple[Path, list[dict[str, Any]]]:
@@ -511,23 +388,13 @@ def build_message(path: Path, root: Path, count: int, source_md: Path | None = N
 
 def send_file(args: argparse.Namespace, path: Path, count: int, source_md: Path | None = None) -> None:
     message = build_message(path, args.transcripts_root, count, source_md)
-    command = [
-        str(args.hermes),
-        "send",
-        "--to",
-        args.target,
-        "--subject",
-        f"[Podsum] {time.strftime('%Y-%m-%d')} {count} 篇合并文字稿 EPUB",
-        message,
-    ]
+    subject = f"[Podsum] {time.strftime('%Y-%m-%d')} {count} 篇合并文字稿 EPUB"
     if args.dry_run:
         log(f"would send: {path}")
         return
 
-    result = subprocess.run(command, text=True, capture_output=True)
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "hermes send failed").strip())
-    log((result.stdout or "sent").strip())
+    output = send_hermes_file(str(args.hermes), args.target, subject, message)
+    log(output)
 
 
 def run(args: argparse.Namespace) -> int:
@@ -563,7 +430,7 @@ def run(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Send Podsum Markdown reports to Discord.")
+    parser = argparse.ArgumentParser(description="经 Hermes 将 Podsum Markdown 报告投递到配置目标（默认 Discord）。")
     parser.add_argument("--transcripts-root", type=Path, default=DEFAULT_TRANSCRIPTS_ROOT)
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE_FILE)
     parser.add_argument("--memory-file", type=Path, default=DEFAULT_MEMORY_FILE)

@@ -38,3 +38,7 @@ credentials.json
 *.tmp
 *.part
 *~
+
+# Local notes / research scratch
+context.md
+research.md

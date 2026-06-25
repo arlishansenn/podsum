@@ -15,13 +15,26 @@ import json
 import sys
 from pathlib import Path
 
-# Ensure the skill scripts directory is on sys.path
-_skill_dir = Path(__file__).resolve().parent
-if str(_skill_dir) not in sys.path:
-    sys.path.insert(0, str(_skill_dir))
+# 从当前脚本向上查找仓库根目录，并把 outputs 加入导入路径
+_current_path = Path(__file__).resolve()
+_outputs_dir = None
+for _parent in _current_path.parents:
+    _candidate = _parent / "outputs"
+    if _candidate.is_dir():
+        _outputs_dir = _candidate
+        break
 
-from epub_generator import create_epub_from_markdown
-from preprocess import sanitize_title, sanitize_filename
+if _outputs_dir is None:
+    raise RuntimeError("Could not locate repository outputs directory")
+
+if str(_outputs_dir) not in sys.path:
+    sys.path.insert(0, str(_outputs_dir))
+
+from podsum_core.epub_converter import (
+    create_epub_from_markdown,
+    sanitize_filename,
+    sanitize_title,
+)
 
 
 def main():
