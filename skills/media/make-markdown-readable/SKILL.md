@@ -1,79 +1,51 @@
 ---
 name: make-markdown-readable
-description: Clean Markdown into human-readable reading artifacts and export formats such as EPUB. Use for ASR/Whisper repetition cleanup, readable Markdown generation, EPUB export, WeChat Reading-safe output, or direct EPUB export from already-clean Markdown. Never load long source bodies into agent context; pass file paths to the scripts.
+description: Clean Markdown into human-readable reading artifacts and export formats such as EPUB. Use for ASR/Whisper repetition cleanup, readable Markdown generation, EPUB export, WeChat Reading-safe output, or direct EPUB export from already-clean Markdown. Pass file paths to the scripts; do not preview input content.
 ---
 
 # Make Markdown Readable
 
-This skill turns Markdown into a human-readable reading artifact.
+Turn messy Markdown (ASR / Whisper / course / meeting notes) into a readable
+artifact plus an EPUB.
 
 Core model:
 
 ```text
-source Markdown
-  -> clean readable Markdown
-  -> export format (currently EPUB)
+source Markdown -> clean readable Markdown -> export format (EPUB)
 ```
 
-## Context boundary
+## Before running
 
-- Do not read long source Markdown bodies into agent context.
-- Pass file paths directly to deterministic scripts.
-- Inspect only metadata before execution: path, suffix, size.
-- After execution, read reports or JSON summaries with bounded output.
-- Use `send-file` only when the user asks to deliver the generated file.
+Confirm the input file with metadata only:
 
-## Default path: clean + EPUB
+    stat <path>
+    wc -c <path>
 
-Use this for ASR, Whisper, podcast, course, meeting, or other messy Markdown
-that should become readable:
+Do not preview or read the input content. The wrapper reads the file and
+derives the title internally; you never need to open it.
 
-```bash
-/usr/bin/python3 ~/.hermes/skills/media/make-markdown-readable/scripts/clean_markdown.py \
-  /absolute/path/input.md \
-  --output-dir /absolute/path/out
-```
+## Default: clean + EPUB
 
-Outputs:
+    /usr/bin/python3 ~/.hermes/skills/media/make-markdown-readable/scripts/clean_markdown.py \
+      /absolute/path/input.md \
+      --output-dir /absolute/path/out
 
-- readable Markdown
-- EPUB
-- JSON audit report
+Outputs: cleaned Markdown, EPUB, and a full `.report.json` on disk.
+The script prints only a compact summary; read the summary, not the report body.
 
-## Clean-only semantics
+## Export EPUB only
 
-If the user only wants readable Markdown, run the default path and use the
-cleaned Markdown output from the report. The EPUB is an export artifact and can
-be ignored.
+Use when the input is already readable and no cleanup is wanted:
 
-## Export-only EPUB
+    /usr/bin/python3 ~/.hermes/skills/media/make-markdown-readable/scripts/export_epub.py \
+      --input /absolute/path/clean.md \
+      --output /absolute/path/book.epub \
+      --title "Book Title" \
+      --author "Author"
 
-Use this when the input Markdown is already readable and no cleanup is wanted:
+Optional profiles before export: `--preprocess wechat|clean`,
+`--strip-timestamps`, `--strip-fillers`.
 
-```bash
-/usr/bin/python3 ~/.hermes/skills/media/make-markdown-readable/scripts/export_epub.py \
-  --input /absolute/path/clean.md \
-  --output /absolute/path/book.epub \
-  --title "Book Title" \
-  --author "Author"
-```
+## Delivery
 
-Optional cleaning profiles before export:
-
-- `--preprocess wechat`: WeChat Reading-safe text/title/filename cleanup.
-- `--preprocess clean`: general link/source cleanup.
-- `--strip-timestamps`: remove `[HH:MM:SS]` markers.
-- `--strip-fillers`: remove common oral fillers.
-
-## Compatibility entrypoints
-
-These old script names remain as shims during migration:
-
-- `scripts/run_transcript_cleaner.py` -> `scripts/clean_markdown.py`
-- `scripts/generate_epub.py` -> `scripts/export_epub.py`
-
-## Ownership
-
-- Cleanup is implemented in `outputs/transcript_cleaner`.
-- EPUB generation is implemented in `outputs/podsum_core/epub_converter`.
-- This skill exposes those implementations; do not recreate cleanup or EPUB logic here.
+Use the `send-file` skill only when the user asks to deliver the generated file.
