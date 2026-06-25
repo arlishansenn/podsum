@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from dataclasses import asdict, dataclass, field
 from difflib import SequenceMatcher
 from typing import Any, Iterator, List, Sequence, Tuple
@@ -43,6 +44,17 @@ FILLER_RE = re.compile(
     r")[，,、。！？!?:：;；\s]*"
 )
 EDIT_SUMMARY_LIMIT = 240
+
+# 热路径固定正则统一预编译，避免短间隔重复扫描里反复触发 re._compile。
+RESTART_SENTENCE_END_RE = re.compile(r"[。！？!?]")
+RESTART_CJK_LATIN_RE = re.compile(r"[\u3400-\u9fffA-Za-z]")
+RESTART_PUNCT_ONLY_RE = re.compile(r"[\s\d，。！？；：、\"“”「」『』\-,.…— ]+")
+EMPHASIS_REPEAT_NORMALIZE_RE = re.compile(r"[\s，,、。！？!?；;：:]+")
+CJK_RE = re.compile(r"[\u3400-\u9fff]")
+UNIT_LENGTH_RE = re.compile(r"[\u3400-\u9fffA-Za-z0-9]")
+TRAILING_LATIN_WORD_RE = re.compile(r"[A-Za-z0-9_]+$")
+DAMAGED_FRAGMENT_RE = re.compile(r"(?:……|…|—|--|\b[xX]{3,}\b|[xX]{4,}|[?？]{3,})")
+FILLER_TAIL_RE = re.compile(r"(?:嗯|呃|那个|怎么说|就是)[，,、…—\s]*$")
 
 
 @dataclass
@@ -307,18 +319,19 @@ def has_semantic_protection_signal(text: str) -> bool:
     return bool(SEMANTIC_PROTECTION_RE.search(text))
 
 
+@lru_cache(maxsize=100000)
 def is_restart_unit(unit: str) -> bool:
     # 单位长度判定用 CJK+拉丁字母数字合并计数，使英文片段也能满足长度门槛
     if measure_unit_length(unit) < 3:
         return False
     # 跨句（含多个句末标点）的属于句子级重复，交给句块规则处理，不在此收敛
-    if len(re.findall(r"[。！？!?]", unit)) >= 2:
+    if len(RESTART_SENTENCE_END_RE.findall(unit)) >= 2:
         return False
     if len(set(unit)) <= 2:
         return False
-    if not re.search(r"[\u3400-\u9fffA-Za-z]", unit):
+    if not RESTART_CJK_LATIN_RE.search(unit):
         return False
-    return not re.fullmatch(r"[\s\d，。！？；：、\"“”「」『』\-,.…— ]+", unit)
+    return not RESTART_PUNCT_ONLY_RE.fullmatch(unit)
 
 
 def has_emphasis_continuation(tail: str) -> bool:
@@ -326,8 +339,8 @@ def has_emphasis_continuation(tail: str) -> bool:
 
 
 def is_emphasis_repeat_fragment(unit: str, tail: str) -> bool:
-    normalized_unit = re.sub(r"[\s，,、。！？!?；;：:]+", "", unit)
-    normalized_tail = re.sub(r"[\s，,、。！？!?；;：:]+", "", tail[:8])
+    normalized_unit = EMPHASIS_REPEAT_NORMALIZE_RE.sub("", unit)
+    normalized_tail = EMPHASIS_REPEAT_NORMALIZE_RE.sub("", tail[:8])
     context = normalized_unit + normalized_tail
     return "很重要" in context or "重要" in context
 
@@ -397,9 +410,34 @@ def collapse_intra_sentence_short_gap_repeats(paragraph: str) -> Tuple[str, int]
         return value, removed
     while True:
         changed = False
-        max_match_len = min(80, len(value) // 2)
+        text_len = len(value)
+        max_match_len = min(80, text_len // 2)
+        max_offset = min(text_len - 1, max_match_len + 14)
+        candidates_by_len: dict[int, set[int]] = {}
+        for offset in range(3, max_offset + 1):
+            common = 0
+            min_len_for_offset = max(3, offset - 14)
+            max_len_for_offset = 80 if offset > 80 else offset
+            for index in range(text_len - offset - 1, -1, -1):
+                if value[index] == value[index + offset]:
+                    common += 1
+                else:
+                    common = 0
+                max_len_for_index = common if common < max_len_for_offset else max_len_for_offset
+                if max_len_for_index < min_len_for_offset:
+                    continue
+                for match_len in range(min_len_for_offset, max_len_for_index + 1):
+                    bucket = candidates_by_len.get(match_len)
+                    if bucket is None:
+                        bucket = set()
+                        candidates_by_len[match_len] = bucket
+                    bucket.add(index)
+
         for match_len in range(max_match_len, 2, -1):
-            for index in range(0, len(value) - match_len):
+            candidate_indexes = candidates_by_len.get(match_len)
+            if not candidate_indexes:
+                continue
+            for index in sorted(candidate_indexes):
                 unit = value[index : index + match_len]
                 if not is_restart_unit(unit):
                     continue
@@ -407,7 +445,7 @@ def collapse_intra_sentence_short_gap_repeats(paragraph: str) -> Tuple[str, int]
                 for gap_len in range(0, 15):
                     second_start = rest_start + gap_len
                     second_end = second_start + match_len
-                    if second_end > len(value):
+                    if second_end > text_len:
                         break
                     gap = value[rest_start:second_start]
                     if value[second_start:second_end] != unit:
@@ -452,14 +490,41 @@ def find_residual_short_gap_repeats_in_line(line: str, line_no: int) -> List[Res
     if line.lstrip().startswith("#"):
         return []
     residuals: List[ResidualPattern] = []
-    max_match_len = min(80, len(line) // 2)
+    line_len = len(line)
+    max_match_len = min(80, line_len // 2)
+    max_offset = min(line_len - 1, max_match_len + 14)
+    candidate_lengths_by_index: dict[int, set[int]] = {}
+    for offset in range(3, max_offset + 1):
+        common = 0
+        min_len_for_offset = max(3, offset - 14)
+        max_len_for_offset = 80 if offset > 80 else offset
+        for index in range(line_len - offset - 1, -1, -1):
+            if line[index] == line[index + offset]:
+                common += 1
+            else:
+                common = 0
+            max_len_for_index = common if common < max_len_for_offset else max_len_for_offset
+            if max_len_for_index < min_len_for_offset:
+                continue
+            bucket = candidate_lengths_by_index.get(index)
+            if bucket is None:
+                bucket = set()
+                candidate_lengths_by_index[index] = bucket
+            for match_len in range(min_len_for_offset, max_len_for_index + 1):
+                bucket.add(match_len)
+
     occupied_until = -1
-    for index in range(0, len(line)):
+    for index in range(0, line_len):
         if index < occupied_until:
             continue
+        candidate_lengths = candidate_lengths_by_index.get(index)
+        if not candidate_lengths:
+            continue
         for match_len in range(max_match_len, 2, -1):
+            if match_len not in candidate_lengths:
+                continue
             rest_start = index + match_len
-            if rest_start > len(line):
+            if rest_start > line_len:
                 continue
             unit = line[index:rest_start]
             if not is_restart_unit(unit):
@@ -468,7 +533,7 @@ def find_residual_short_gap_repeats_in_line(line: str, line_no: int) -> List[Res
             for gap_len in range(0, 15):
                 second_start = rest_start + gap_len
                 second_end = second_start + match_len
-                if second_end > len(line):
+                if second_end > line_len:
                     break
                 gap = line[rest_start:second_start]
                 if line[second_start:second_end] != unit:
@@ -503,12 +568,10 @@ def scan_residual_short_gap_repeats(text: str) -> List[ResidualPattern]:
 
 def count_cjk(text: str) -> int:
     # 仅统计中日韩字符
-    return len(re.findall(r"[\u3400-\u9fff]", text))
+    return len(CJK_RE.findall(text))
 
 
-UNIT_LENGTH_RE = re.compile(r"[\u3400-\u9fffA-Za-z0-9]")
-
-
+@lru_cache(maxsize=100000)
 def measure_unit_length(text: str) -> int:
     # 单位长度判定：CJK 字符与拉丁字母数字合并计数，避免纯英文片段长度恒为 0
     return len(UNIT_LENGTH_RE.findall(text))
@@ -575,8 +638,8 @@ SAFE_COORDINATION_PREFIX_RE = re.compile(
 
 
 def safe_coordination_prefix(prefix: str) -> str:
-    # Never cut a Latin word in half, e.g. CoreWeave / Crusoe -> shared "C".
-    prefix = re.sub(r"[A-Za-z0-9_]+$", "", prefix)
+    # 避免截断拉丁词，例如 CoreWeave / Crusoe 只共享 "C"。
+    prefix = TRAILING_LATIN_WORD_RE.sub("", prefix)
     prefix = prefix.rstrip()
     if not prefix or "……" in prefix or "…" in prefix or "—" in prefix:
         return ""
@@ -589,10 +652,7 @@ def is_high_confidence_restart_tail(tail: str) -> bool:
     value = tail.strip()
     if not value:
         return False
-    return bool(
-        re.search(r"(?:……|…|—|--|\b[xX]{3,}\b|[xX]{4,}|[?？]{3,})", value)
-        or re.search(r"(?:嗯|呃|那个|怎么说|就是)[，,、…—\s]*$", value)
-    )
+    return bool(DAMAGED_FRAGMENT_RE.search(value) or FILLER_TAIL_RE.search(value))
 
 
 def collapse_shared_prefix_clauses(
@@ -659,7 +719,7 @@ def collapse_shared_prefix_clauses(
             continue
 
         raw_prefix = longest_common_prefix(left_body, right_body)
-        prefix = re.sub(r"[A-Za-z0-9_]+$", "", raw_prefix).rstrip()
+        prefix = TRAILING_LATIN_WORD_RE.sub("", raw_prefix).rstrip()
         if count_cjk(prefix) < min_prefix_cjk:
             index += 2
             continue
