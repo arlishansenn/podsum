@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -29,6 +30,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory containing the transcript_cleaner Python package",
     )
     return parser
+
+
+def bounded_text(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "\n[truncated]"
+
+
+def report_path_for(markdown_path: str) -> str:
+    return str(Path(markdown_path).with_suffix(".report.json"))
+
+
+def summarize_report(report: dict) -> dict:
+    stats = report.get("stats", {})
+    residual_patterns = report.get("residual_patterns", [])
+    return {
+        "ok": True,
+        "source": report.get("source"),
+        "markdown": report.get("markdown"),
+        "epub": report.get("epub"),
+        "report": report_path_for(str(report.get("markdown", ""))),
+        "title": report.get("title"),
+        "stats": {
+            "chars_before": stats.get("chars_before"),
+            "chars_after": stats.get("chars_after"),
+            "chars_removed": stats.get("chars_removed"),
+            "paragraphs_changed": stats.get("paragraphs_changed"),
+            "rule_hits": stats.get("rule_hits", {}),
+            "rule_char_changes": stats.get("rule_char_changes", {}),
+        },
+        "edits_count": len(report.get("edits", [])),
+        "residual_patterns_count": len(residual_patterns),
+    }
 
 
 def run(args: argparse.Namespace) -> int:
@@ -67,8 +101,42 @@ def run(args: argparse.Namespace) -> int:
         if value:
             command.extend((option, value))
 
-    completed = subprocess.run(command, cwd=project_root, check=False)
-    return completed.returncode
+    completed = subprocess.run(command, cwd=project_root, text=True, capture_output=True, check=False)
+    if completed.returncode != 0:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "returncode": completed.returncode,
+                    "stdout": bounded_text(completed.stdout or "", 2000),
+                    "stderr": bounded_text(completed.stderr or "", 2000),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return completed.returncode
+
+    try:
+        report = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": "Transcript cleaner returned non-JSON output",
+                    "stdout": bounded_text(completed.stdout or "", 2000),
+                    "stderr": bounded_text(completed.stderr or "", 2000),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 1
+
+    # 只把摘要写入对话上下文，完整报告保留在 .report.json 文件中
+    print(json.dumps(summarize_report(report), ensure_ascii=False, indent=2))
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
