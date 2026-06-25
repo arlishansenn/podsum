@@ -475,6 +475,38 @@ class TranscriptCleanerTest(unittest.TestCase):
         result = transcript_cleaner.clean_text(text)
         self.assertEqual(result.text, text + "\n")
 
+    # --- 中英混排重复（issue：混排场景一致性）---
+
+    def test_collapses_mixed_english_phrase_repeat_with_chinese_context(self) -> None:
+        # 中文语境里夹的英文短语紧邻重复，应收敛为一份
+        text = "这个 machine learning machine learning 很重要。"
+        result = transcript_cleaner.clean_text(text)
+        self.assertEqual(result.text, "这个 machine learning 很重要。\n")
+
+    def test_collapses_short_english_token_stutter_fully(self) -> None:
+        # 短英文词的口语叠词应收敛到一份，而不是只删一个
+        text = "token token token 很多。"
+        result = transcript_cleaner.clean_text(text)
+        self.assertEqual(result.text, "token 很多。\n")
+
+    def test_collapses_short_english_acronym_stutter(self) -> None:
+        # 短英文缩写的口语叠词应收敛到一份
+        text = "所以 AI AI AI 是趋势。"
+        result = transcript_cleaner.clean_text(text)
+        self.assertEqual(result.text, "所以 AI 是趋势。\n")
+
+    def test_keeps_chinese_anchored_mixed_repeat(self) -> None:
+        # 含中文锚点的混排紧邻重复（已正常）应收敛为一份
+        text = "我们用 GPT 模型，我们用 GPT 模型来做。"
+        result = transcript_cleaner.clean_text(text)
+        self.assertEqual(result.text, "我们用 GPT 模型来做。\n")
+
+    def test_does_not_remove_meaningful_mixed_recurrence(self) -> None:
+        # 中间有实质内容的混排自然复现不应误删
+        text = "先讲 GPT 的原理，然后我们再用 GPT 做一个例子。"
+        result = transcript_cleaner.clean_text(text)
+        self.assertEqual(result.text, text + "\n")
+
 
 if __name__ == "__main__":
     unittest.main()

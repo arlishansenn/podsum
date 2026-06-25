@@ -55,6 +55,7 @@ UNIT_LENGTH_RE = re.compile(r"[\u3400-\u9fffA-Za-z0-9]")
 TRAILING_LATIN_WORD_RE = re.compile(r"[A-Za-z0-9_]+$")
 DAMAGED_FRAGMENT_RE = re.compile(r"(?:……|…|—|--|\b[xX]{3,}\b|[xX]{4,}|[?？]{3,})")
 FILLER_TAIL_RE = re.compile(r"(?:嗯|呃|那个|怎么说|就是)[，,、…—\s]*$")
+LATIN_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_'-]*")
 
 
 @dataclass
@@ -356,11 +357,75 @@ def is_auto_deletable_short_gap_repeat(unit: str, gap: str, tail: str) -> bool:
     )
 
 
+def is_latin_word_repeat_unit(words: Sequence[str]) -> bool:
+    joined = "".join(words)
+    return measure_unit_length(joined) >= 2 and any(RESTART_CJK_LATIN_RE.search(word) for word in words)
+
+
+def collapse_adjacent_latin_word_repeats(paragraph: str) -> Tuple[str, int]:
+    removed = 0
+    if not CJK_RE.search(paragraph):
+        return paragraph, removed
+    matches = list(LATIN_WORD_RE.finditer(paragraph))
+    if len(matches) < 2:
+        return paragraph, removed
+    output: List[str] = []
+    cursor = 0
+    run_start = 0
+    while run_start < len(matches):
+        run_end = run_start + 1
+        while run_end < len(matches) and paragraph[matches[run_end - 1].end() : matches[run_end].start()].isspace():
+            run_end += 1
+        if run_end - run_start < 2:
+            run_start = run_end
+            continue
+        run_matches = matches[run_start:run_end]
+        words = [match.group(0) for match in run_matches]
+        run_cursor = run_matches[0].start()
+        token_index = 0
+        while token_index < len(run_matches):
+            max_unit_words = min(6, (len(run_matches) - token_index) // 2)
+            collapsed = False
+            for unit_words in range(max_unit_words, 0, -1):
+                unit = words[token_index : token_index + unit_words]
+                if not is_latin_word_repeat_unit(unit):
+                    continue
+                copies = 1
+                next_index = token_index + unit_words
+                while next_index + unit_words <= len(run_matches) and words[next_index : next_index + unit_words] == unit:
+                    copies += 1
+                    next_index += unit_words
+                if copies < 2 or (unit_words == 1 and copies < 3):
+                    continue
+                keep_end = run_matches[token_index + unit_words - 1].end()
+                repeat_end = run_matches[next_index - 1].end()
+                output.append(paragraph[cursor:keep_end])
+                removed += repeat_end - keep_end
+                cursor = repeat_end
+                run_cursor = repeat_end
+                token_index = next_index
+                collapsed = True
+                break
+            if not collapsed:
+                token_index += 1
+        if run_cursor != run_matches[0].start():
+            output.append(paragraph[cursor:run_matches[-1].end()])
+            cursor = run_matches[-1].end()
+        run_start = run_end
+    if removed == 0:
+        return paragraph, removed
+    output.append(paragraph[cursor:])
+    return "".join(output), removed
+
+
 def collapse_word_stutters(paragraph: str) -> Tuple[str, int]:
     removed = 0
     value = paragraph
     if value.lstrip().startswith("#"):
         return value, removed
+
+    value, latin_removed = collapse_adjacent_latin_word_repeats(value)
+    removed += latin_removed
 
     def replace_single(match: re.Match[str]) -> str:
         nonlocal removed
