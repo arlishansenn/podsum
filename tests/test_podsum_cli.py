@@ -1688,6 +1688,98 @@ class PodsumCliTest(unittest.TestCase):
             self.assertEqual(needs_before, needs_path.read_text(encoding="utf-8"))
             self.assertEqual(report_before, report.read_text(encoding="utf-8"))
 
+    def test_email_run_graph_reconciles_existing_need_from_future_scan(self) -> None:
+        if not email_graph.langgraph_available():
+            self.skipTest("langgraph is not installed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            artifact_dir = tmp_path / "downloads" / "EmailReports"
+            artifact_dir.mkdir(parents=True)
+            open_need = EvidenceNeed.from_dict(
+                {
+                    "need_id": "need-2026-07-05-decision-77-snippet-only",
+                    "status": "open",
+                    "urgency": "high",
+                    "topic_id": "decision",
+                    "source_brief_id": "brief-2026-07-05",
+                    "claim_or_question": "UID=77 是否有邮件摘要之外的可验证证据？",
+                    "why_needed": "当前 EvidencePack 将该邮件标记为 snippet_only。",
+                    "known_source_refs": ["email:77"],
+                    "needed_evidence": ["public_link_or_full_body"],
+                    "created_at": "2026-07-05T08:00:00Z",
+                    "last_checked_at": "2026-07-05T08:00:00Z",
+                    "resolved_by": [],
+                    "response_policy": "emit_need_reference_only",
+                    "audit_trail": [],
+                }
+            )
+            need_store.save_need_store(artifact_dir, need_store.replace_need(need_store.empty_need_store(), open_need))
+            scan_file = tmp_path / "email-scan-day2.json"
+            scan_file.write_text(
+                json.dumps(
+                    {
+                        "date": "2026-07-06",
+                        "account": "fixture@example.invalid",
+                        "window": "1d",
+                        "scan_limit": 300,
+                        "raw_count": 1,
+                        "possibly_truncated": False,
+                        "items": [
+                            {
+                                "uid": "77",
+                                "date": "Mon, 06 Jul 2026 08:00:00 +0800",
+                                "from": "Fixture Sender <sender@example.invalid>",
+                                "subject": "Decision source found",
+                                "snippet": "A verified source is now available.",
+                                "has_attachments": False,
+                                "links": [],
+                                "evidence": [
+                                    {
+                                        "type": "public_link",
+                                        "uid": "77",
+                                        "url": "https://example.invalid/source",
+                                        "status": "fetched",
+                                        "title": "Source",
+                                        "excerpt": "Verified source text.",
+                                    }
+                                ],
+                                "risks": [],
+                                "flags": [],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+            topic_map = {"object_type": "email_topic_map", "version": 1, "topics": []}
+            context = email_graph.build_email_run_context(
+                policy,
+                topic_map,
+                None,
+                False,
+                email_summary.fetch_link_context,
+                "dry-run: Podsum local summary engine; no external summary engine called",
+                {},
+            )
+            initial_state = email_graph.initial_email_run_state(
+                "graph-reconcile-fixture",
+                "fixture@example.invalid",
+                "2026-07-06",
+                artifact_dir,
+                scan_file,
+            )
+            app = email_graph.build_in_memory_email_run_graph()
+            config = {"configurable": {"thread_id": "graph-reconcile-fixture", "email_run_context": context}}
+
+            app.invoke(initial_state, config)
+
+            reconciled = need_store.load_need_store(artifact_dir)["needs"][0]
+            self.assertEqual(reconciled["status"], "fulfilled_now")
+            self.assertEqual(reconciled["resolved_by"], ["pack-2026-07-06"])
+            self.assertNotEqual(reconciled["audit_trail"][-1]["added_evidence_refs"], [])
+
     def test_email_summary_default_engine_does_not_call_hermes_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
