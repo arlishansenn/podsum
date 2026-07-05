@@ -1,0 +1,24 @@
+X-Podsum-Fixture-UID: 103
+From: Fixture Person <person@example.invalid>
+To: Fixture Recipient <recipient@example.invalid>
+Subject: Fixture Personal Follow-up
+Date: Sun, 05 Jul 2026 08:03:00 +0800
+Message-ID: <fixture-personal-attachment-001@example.invalid>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="fixture-mixed-001"
+
+--fixture-mixed-001
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Fixture personal message asking for a follow-up decision.
+The original attachment content has been replaced.
+
+--fixture-mixed-001
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="redacted-attachment.bin"
+Content-Transfer-Encoding: base64
+
+cmVkYWN0ZWQK
+
+--fixture-mixed-001--

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import podcast_downloader as downloader
+import podsum_email_summary as email_summary
 import podsum_send_to_feishu as sender
 
 
@@ -238,6 +239,12 @@ def run_once(args: argparse.Namespace) -> int:
     else:
         sent_count = send_ready(args, state)
         log(f"Sent {sent_count} episode(s).")
+    if getattr(args, "email_summary", False):
+        result = run_email_summary(email_summary_args_from_podsum(args))
+        if result != 0:
+            return result
+    else:
+        log("Email summary skipped.")
     cleanup_if_requested(args, state)
     return 0
 
@@ -451,6 +458,48 @@ def send(args: argparse.Namespace) -> int:
     return 0
 
 
+def email_summary_args_from_podsum(args: argparse.Namespace) -> argparse.Namespace:
+    return argparse.Namespace(
+        output=args.output,
+        env_file=args.email_env_file,
+        scan_file=args.email_scan_file,
+        eml_dir=args.email_eml_dir,
+        imap_host=args.email_imap_host,
+        imap_port=args.email_imap_port,
+        imap_user=args.email_imap_user,
+        imap_pass=args.email_imap_pass,
+        mailbox=args.email_mailbox,
+        recent_days=args.email_recent_days,
+        limit=args.email_limit,
+        email_summary_prompt=args.email_summary_prompt,
+        project_dir=args.project_dir,
+        target=args.target,
+        hermes=args.hermes,
+        hermes_timeout=args.hermes_timeout,
+        dry_run=args.email_dry_run,
+        no_send=args.email_no_send,
+        allow_imap_read=args.email_allow_imap_read,
+    )
+
+
+def run_email_summary(args: argparse.Namespace) -> int:
+    email_summary.normalize_args(args)
+    try:
+        scan_path, report_path, epub_path = email_summary.run(args)
+    except RuntimeError as exc:
+        log(f"Email summary failed: {exc}")
+        return 1
+    log(f"Wrote email scan: {scan_path}")
+    log(f"Wrote email summary: {report_path}")
+    if epub_path:
+        log(f"Wrote email summary EPUB: {epub_path}")
+    return 0
+
+
+def email_summary_command(args: argparse.Namespace) -> int:
+    return run_email_summary(args)
+
+
 def load_json_if_exists(path: Path, default: dict[str, Any]) -> dict[str, Any]:
     if not path.exists():
         return default
@@ -550,12 +599,35 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--bundle-retention-days", type=int, default=sender.DEFAULT_BUNDLE_RETENTION_DAYS)
 
 
+def add_run_email_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--email-summary", action="store_true", help="Scan recent email and send a Podsum email summary after podcast delivery.")
+    parser.add_argument("--email-env-file", type=Path, default=email_summary.DEFAULT_ENV_FILE)
+    parser.add_argument("--email-scan-file", type=Path)
+    parser.add_argument("--email-eml-dir", type=Path)
+    parser.add_argument("--email-imap-host", default="")
+    parser.add_argument("--email-imap-port", type=int, default=0)
+    parser.add_argument("--email-imap-user", default="")
+    parser.add_argument("--email-imap-pass", default="")
+    parser.add_argument("--email-mailbox", default="")
+    parser.add_argument("--email-recent-days", type=int, default=email_summary.DEFAULT_RECENT_DAYS)
+    parser.add_argument("--email-limit", type=int, default=email_summary.DEFAULT_LIMIT)
+    parser.add_argument("--email-summary-prompt", type=Path, default=email_summary.DEFAULT_PROMPT)
+    parser.add_argument("--email-dry-run", action="store_true")
+    parser.add_argument("--email-no-send", action="store_true")
+    parser.add_argument(
+        "--email-allow-imap-read",
+        action="store_true",
+        help="Explicitly allow the email summary step to read the configured Gmail/IMAP mailbox.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Podsum as one stateful pipeline.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run_parser = subparsers.add_parser("run-once")
     add_common_args(run_parser)
+    add_run_email_args(run_parser)
     run_parser.add_argument("--skip-download", action="store_true")
     run_parser.add_argument("--skip-transcribe", action="store_true")
     run_parser.add_argument("--skip-send", action="store_true")
@@ -573,8 +645,13 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_args(send_parser)
     send_parser.set_defaults(func=send)
 
+    email_parser = subparsers.add_parser("email-summary")
+    email_summary.add_args(email_parser)
+    email_parser.set_defaults(func=email_summary_command)
+
     retry_parser = subparsers.add_parser("retry-failed")
     add_common_args(retry_parser)
+    add_run_email_args(retry_parser)
     retry_parser.add_argument("--skip-download", action="store_true")
     retry_parser.add_argument("--skip-transcribe", action="store_true")
     retry_parser.add_argument("--skip-send", action="store_true")
@@ -602,17 +679,32 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def normalize_args(args: argparse.Namespace) -> None:
-    args.feeds_file = args.feeds_file.expanduser()
-    args.state = args.state.expanduser()
-    args.output = args.output.expanduser()
-    args.memory_file = args.memory_file.expanduser()
-    args.interpretation_prompt = args.interpretation_prompt.expanduser()
-    args.project_dir = args.project_dir.expanduser()
-    args.hermes = args.hermes.expanduser()
+    if hasattr(args, "feeds_file"):
+        args.feeds_file = args.feeds_file.expanduser()
+    if hasattr(args, "state"):
+        args.state = args.state.expanduser()
+    if hasattr(args, "output"):
+        args.output = args.output.expanduser()
+    if hasattr(args, "memory_file"):
+        args.memory_file = args.memory_file.expanduser()
+    if hasattr(args, "interpretation_prompt"):
+        args.interpretation_prompt = args.interpretation_prompt.expanduser()
+    if hasattr(args, "project_dir"):
+        args.project_dir = args.project_dir.expanduser()
+    if hasattr(args, "hermes"):
+        args.hermes = args.hermes.expanduser()
     if hasattr(args, "old_download_state"):
         args.old_download_state = args.old_download_state.expanduser()
     if hasattr(args, "old_sent_state"):
         args.old_sent_state = args.old_sent_state.expanduser()
+    if hasattr(args, "email_env_file"):
+        args.email_env_file = args.email_env_file.expanduser()
+    if hasattr(args, "email_scan_file") and args.email_scan_file:
+        args.email_scan_file = args.email_scan_file.expanduser()
+    if hasattr(args, "email_eml_dir") and args.email_eml_dir:
+        args.email_eml_dir = args.email_eml_dir.expanduser()
+    if hasattr(args, "email_summary_prompt"):
+        args.email_summary_prompt = args.email_summary_prompt.expanduser()
 
 
 def main() -> int:

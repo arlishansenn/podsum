@@ -1,0 +1,13 @@
+X-Podsum-Fixture-UID: 102
+From: =?UTF-8?B?Rml4dHVyZSDkuK3mlofnvJbnoIHlj5Hku7bkuro=?= <alerts@example.invalid>
+To: Fixture Recipient <recipient@example.invalid>
+Subject: =?UTF-8?B?Rml4dHVyZSBHb29nbGXlv6vorq8gLSBSV0E=?=
+Date: Sun, 05 Jul 2026 08:02:00 +0800
+Message-ID: <fixture-google-alert-001@example.invalid>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+
+Fixture Google Alerts style digest.
+Sanitized result one: tokenized real world asset update.
+Source: https://example.invalid/alert/rwa

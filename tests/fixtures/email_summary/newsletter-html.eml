@@ -1,0 +1,27 @@
+X-Podsum-Fixture-UID: 101
+From: Fixture Newsletter <newsletter@example.invalid>
+To: Fixture Recipient <recipient@example.invalid>
+Subject: Fixture Newsletter 001
+Date: Sun, 05 Jul 2026 08:01:00 +0800
+Message-ID: <fixture-newsletter-001@example.invalid>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="fixture-alt-001"
+
+--fixture-alt-001
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Fixture newsletter plain text. Agent workflow update.
+Read more at https://example.invalid/newsletter/001
+
+--fixture-alt-001
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+<html><body>
+<h1>Fixture newsletter</h1>
+<p>Agent workflow update with a sanitized link.</p>
+<a href="https://example.invalid/newsletter/001">Read fixture item</a>
+</body></html>
+
+--fixture-alt-001--

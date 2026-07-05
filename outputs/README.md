@@ -2,6 +2,12 @@
 
 Podsum runs on `macmini`. It uses one stateful runner to download the latest podcast episode per feed, transcribe completed audio locally with `mlx-whisper`, write Markdown transcripts, generate Hermes deep interpretations, merge them into one Markdown report, convert that report to EPUB, and send the EPUB to Discord.
 
+It also owns the migrated OpenClaw email-summary workflow as an opt-in feature:
+scan recent IMAP/Gmail messages, write a structured scan JSON file, ask Hermes
+for a daily summary, convert the summary to EPUB, and send it through the same
+delivery target. Offline validation can run from sanitized `.eml` fixtures
+without touching Gmail.
+
 ## Runtime
 
 Project:
@@ -17,6 +23,9 @@ Audio and transcripts:
 ~/Podcasts/AutoDownloads/<Show>/Transcripts/<Episode>.md
 ~/Podcasts/AutoDownloads/Reports/podsum-<timestamp>.md
 ~/Podcasts/AutoDownloads/Reports/podsum-<timestamp>.epub
+~/Podcasts/AutoDownloads/EmailReports/email-scan-YYYY-MM-DD.json
+~/Podcasts/AutoDownloads/EmailReports/email-summary-YYYY-MM-DD.md
+~/Podcasts/AutoDownloads/EmailReports/email-summary-YYYY-MM-DD.epub
 ```
 
 State:
@@ -119,6 +128,12 @@ Run the full pipeline:
 /usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" run-once --cleanup
 ```
 
+Run the full podcast pipeline and then generate the email summary:
+
+```sh
+/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" run-once --cleanup --email-summary
+```
+
 Transcribe ready downloads only:
 
 ```sh
@@ -136,6 +151,63 @@ Retry failed stages:
 ```sh
 /usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" retry-failed
 ```
+
+Run the email summary only:
+
+```sh
+/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary
+```
+
+Real Gmail/IMAP reads require an explicit confirmation flag:
+
+```sh
+/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --allow-imap-read
+```
+
+For the integrated runner, use:
+
+```sh
+/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" run-once --cleanup --email-summary --email-allow-imap-read
+```
+
+Email credentials are read from environment variables first, then
+`~/.openclaw/.env`. Supported names:
+
+```text
+PODSUM_EMAIL_IMAP_HOST or IMAP_HOST
+PODSUM_EMAIL_IMAP_PORT or IMAP_PORT
+PODSUM_EMAIL_IMAP_USER or IMAP_USER or GMAIL_USER
+PODSUM_EMAIL_IMAP_PASS or IMAP_PASS or GMAIL_APP_PASSWORD
+PODSUM_EMAIL_IMAP_MAILBOX or IMAP_MAILBOX
+PODSUM_EMAIL_IMAP_TLS_VERIFY or IMAP_REJECT_UNAUTHORIZED
+```
+
+For migration testing without touching Gmail/IMAP:
+
+```sh
+/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --scan-file /path/to/email-scan.json --dry-run --no-send
+/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --eml-dir /path/to/sanitized-eml-fixtures --dry-run --no-send
+```
+
+If both `--scan-file` and `--eml-dir` are provided, `--scan-file` wins. If
+neither is provided, Podsum stops and reminds you to confirm Gmail/IMAP access
+with `--allow-imap-read`.
+
+Generate sanitized fixtures from local raw `.eml` files:
+
+```sh
+/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum_email_fixture_tool.py" redact --input-dir /tmp/raw-eml --output-dir /tmp/sanitized-eml
+```
+
+Capture a small Gmail/IMAP sample directly into sanitized fixtures:
+
+```sh
+/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum_email_fixture_tool.py" capture --output-dir /tmp/sanitized-eml --recent-days 7 --limit 20 --allow-imap-read
+```
+
+Review sanitized fixtures manually before committing them. Raw Gmail `.eml`
+files, real email addresses, account names, app passwords, and original bodies
+must not be committed.
 
 Migrate old state files:
 

@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -12,10 +13,15 @@ ROOT = Path(__file__).resolve().parents[1]
 PODSUM = ROOT / "outputs" / "podsum.py"
 
 
-def run_podsum(*args: str, cwd: Optional[Path] = None) -> subprocess.CompletedProcess[str]:
+def run_podsum(
+    *args: str,
+    cwd: Optional[Path] = None,
+    env: Optional[dict[str, str]] = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(PODSUM), *args],
         cwd=str(cwd or ROOT),
+        env=env,
         text=True,
         capture_output=True,
         check=False,
@@ -371,6 +377,207 @@ class PodsumCliTest(unittest.TestCase):
             retried_episode = retried_state["episodes"]["episode-key"]
             self.assertEqual(retried_episode["status"], "sent")
             self.assertEqual(retried_episode["attempts"]["send"], 2)
+
+    def test_email_summary_uses_scan_file_without_real_imap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            scan_file = tmp_path / "email-scan.json"
+            scan_file.write_text(
+                json.dumps(
+                    {
+                        "date": "2026-07-05",
+                        "account": "fixture@example.com",
+                        "window": "1d",
+                        "scan_limit": 300,
+                        "raw_count": 1,
+                        "possibly_truncated": False,
+                        "items": [
+                            {
+                                "uid": "42",
+                                "date": "Sun, 05 Jul 2026 08:00:00 +0800",
+                                "from": "Newsletter <news@example.com>",
+                                "subject": "AI update",
+                                "snippet": "A concise update about agents.",
+                                "has_attachments": False,
+                                "flags": [],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_podsum(
+                "email-summary",
+                "--scan-file",
+                str(scan_file),
+                "--output",
+                str(tmp_path / "downloads"),
+                "--dry-run",
+                "--no-send",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            report = tmp_path / "downloads" / "EmailReports" / "email-summary-2026-07-05.md"
+            copied_scan = tmp_path / "downloads" / "EmailReports" / "email-scan-2026-07-05.json"
+            self.assertTrue(report.exists())
+            self.assertTrue(copied_scan.exists())
+            self.assertIn("dry-run: skipped Hermes summary", report.read_text(encoding="utf-8"))
+
+    def test_email_summary_uses_eml_dir_without_real_imap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            result = run_podsum(
+                "email-summary",
+                "--eml-dir",
+                str(ROOT / "tests" / "fixtures" / "email_summary"),
+                "--output",
+                str(tmp_path / "downloads"),
+                "--dry-run",
+                "--no-send",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            scan_files = list((tmp_path / "downloads" / "EmailReports").glob("email-scan-*.json"))
+            self.assertEqual(len(scan_files), 1)
+            scan = json.loads(scan_files[0].read_text(encoding="utf-8"))
+            self.assertEqual(scan["account"], "fixture@example.invalid")
+            self.assertEqual(scan["raw_count"], 3)
+            self.assertEqual({item["uid"] for item in scan["items"]}, {"101", "102", "103"})
+            self.assertTrue(any(item["has_attachments"] for item in scan["items"]))
+            self.assertTrue(any("Google快讯" in item["subject"] for item in scan["items"]))
+
+    def test_email_summary_sends_email_specific_epub_with_fake_hermes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            scan_file = tmp_path / "email-scan.json"
+            scan_file.write_text(
+                json.dumps(
+                    {
+                        "date": "2026-07-05",
+                        "account": "fixture@example.invalid",
+                        "window": "1d",
+                        "scan_limit": 300,
+                        "raw_count": 1,
+                        "possibly_truncated": False,
+                        "items": [
+                            {
+                                "uid": "77",
+                                "date": "Sun, 05 Jul 2026 08:00:00 +0800",
+                                "from": "Fixture Sender <sender@example.invalid>",
+                                "subject": "Fixture actionable mail",
+                                "snippet": "A fixture email that should become a summary.",
+                                "has_attachments": False,
+                                "flags": [],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            hermes = tmp_path / "hermes"
+            hermes_args = tmp_path / "hermes-email-send-args.txt"
+            hermes.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = \"-z\" ]; then echo '# Email summary'; exit 0; fi\n"
+                f"if [ \"$1\" = \"send\" ]; then printf '%s\\n' \"$@\" > {hermes_args}; echo 'sent'; exit 0; fi\n"
+                "exit 2\n",
+                encoding="utf-8",
+            )
+            hermes.chmod(0o755)
+
+            result = run_podsum(
+                "email-summary",
+                "--scan-file",
+                str(scan_file),
+                "--output",
+                str(tmp_path / "downloads"),
+                "--hermes",
+                str(hermes),
+                "--project-dir",
+                str(tmp_path),
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            send_args = hermes_args.read_text(encoding="utf-8")
+            self.assertIn("[Podsum] 2026-07-05 Email Summary", send_args)
+            self.assertIn("Podsum Email Summary 2026-07-05", send_args)
+            self.assertNotIn("文字稿", send_args)
+
+    def test_email_summary_requires_explicit_imap_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            result = run_podsum(
+                "email-summary",
+                "--output",
+                str(tmp_path / "downloads"),
+                "--env-file",
+                str(tmp_path / "missing.env"),
+                "--no-send",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Reading Gmail/IMAP requires explicit confirmation", result.stderr + result.stdout)
+            self.assertFalse((tmp_path / "downloads" / "EmailReports").exists())
+
+    def test_email_summary_missing_credentials_fails_after_imap_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = os.environ.copy()
+            for key in [
+                "PODSUM_EMAIL_IMAP_HOST",
+                "PODSUM_EMAIL_IMAP_PORT",
+                "PODSUM_EMAIL_IMAP_USER",
+                "PODSUM_EMAIL_IMAP_PASS",
+                "PODSUM_EMAIL_IMAP_MAILBOX",
+                "IMAP_HOST",
+                "IMAP_PORT",
+                "IMAP_USER",
+                "IMAP_PASS",
+                "IMAP_MAILBOX",
+                "GMAIL_USER",
+                "GMAIL_APP_PASSWORD",
+            ]:
+                env.pop(key, None)
+
+            result = run_podsum(
+                "email-summary",
+                "--output",
+                str(tmp_path / "downloads"),
+                "--env-file",
+                str(tmp_path / "missing.env"),
+                "--allow-imap-read",
+                "--no-send",
+                env=env,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("missing IMAP credentials", result.stderr + result.stdout)
+            self.assertFalse((tmp_path / "downloads" / "EmailReports").exists())
+
+    def test_run_once_can_exercise_email_summary_from_eml_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            result = run_podsum(
+                "run-once",
+                "--state",
+                str(tmp_path / "state.json"),
+                "--output",
+                str(tmp_path / "downloads"),
+                "--skip-download",
+                "--skip-transcribe",
+                "--skip-send",
+                "--email-summary",
+                "--email-eml-dir",
+                str(ROOT / "tests" / "fixtures" / "email_summary"),
+                "--email-dry-run",
+                "--email-no-send",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            self.assertIn("Wrote email summary:", result.stdout)
+            scan_files = list((tmp_path / "downloads" / "EmailReports").glob("email-scan-*.json"))
+            self.assertEqual(len(scan_files), 1)
 
     def test_migrate_state_preserves_sent_transcripts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

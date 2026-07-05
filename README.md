@@ -9,6 +9,12 @@ Podsum is a stateful macOS podcast pipeline that:
 5. converts the report to EPUB and sends it to the configured target;
 6. records each stage so failed or interrupted runs can resume.
 
+It also includes an opt-in email summary feature migrated from the old
+OpenClaw cron workflow: scan recent IMAP/Gmail messages, build a structured
+scan JSON file, generate a Hermes summary, convert it to EPUB, and deliver it
+through the same Podsum target. Offline acceptance tests use sanitized `.eml`
+fixtures instead of real Gmail content.
+
 The production runner, launchd templates, feed configuration and operational
 documentation are in [`outputs/`](outputs/README.md).
 
