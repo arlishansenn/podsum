@@ -83,17 +83,19 @@ def initial_email_run_state(
     account_id: str,
     date: str,
     artifact_dir: Path,
-    input_scan_path: Path,
+    input_scan_path: Path | None,
 ) -> EmailRunState:
-    return {
+    state: EmailRunState = {
         "run_id": run_id,
         "account_id": account_id,
         "date": date,
         "artifact_dir": str(artifact_dir),
-        "input_scan_path": str(input_scan_path),
         "transitions": [],
         "errors": [],
     }
+    if input_scan_path is not None:
+        state["input_scan_path"] = str(input_scan_path)
+    return state
 
 
 def load_inputs(state: EmailRunState, config: RunnableConfig) -> dict[str, Any]:

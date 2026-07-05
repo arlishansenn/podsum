@@ -28,7 +28,7 @@ import podsum_send_to_feishu as sender
 _email_package_dir = str(Path(__file__).with_name("email"))
 if hasattr(email, "__path__") and _email_package_dir not in email.__path__:
     email.__path__.insert(0, _email_package_dir)
-from email import brief_agent, evidence_agent
+from email import brief_agent, evidence_agent, graph as email_graph
 from email.io import atomic_write_json
 from email.need_store import empty_need_store
 from email.schemas import EmailEvidencePack
@@ -1482,6 +1482,51 @@ def write_report(root: Path, scan: dict[str, Any], markdown: str) -> Path:
     return path
 
 
+def run_podsum_email_graph(
+    args: argparse.Namespace,
+    scan: dict[str, Any] | None,
+    scan_path: Path | None,
+    policy: dict[str, Any],
+    topic_map: dict[str, Any],
+    reason: str,
+) -> tuple[Path, Path, dict[str, Any]]:
+    if not email_graph.langgraph_available():
+        raise RuntimeError("LangGraph is required for --summary-engine podsum email-summary orchestration")
+    artifact_dir = email_reports_dir(args.output)
+    source_scan = scan or _read_scan_file(scan_path)
+    run_id = f"email-summary-{source_scan.get('date', now_stamp())}-{int(time.time())}"
+    context = email_graph.build_email_run_context(
+        policy,
+        topic_map,
+        scan,
+        args.enrich_links,
+        fetch_link_context,
+        reason,
+        {},
+    )
+    initial_state = email_graph.initial_email_run_state(
+        run_id,
+        str(source_scan.get("account", "")),
+        str(source_scan.get("date", "")),
+        artifact_dir,
+        scan_path,
+    )
+    final_state = email_graph.run_email_run_graph(initial_state, context)
+    evidence_pack_path = Path(final_state["evidence_pack_path"])
+    brief_path = Path(final_state["brief_path"])
+    persisted_scan = _read_scan_file(evidence_pack_path)
+    return evidence_pack_path, brief_path, persisted_scan
+
+
+def _read_scan_file(scan_path: Path | None) -> dict[str, Any]:
+    if scan_path is None:
+        raise ValueError("scan_path is required when scan is not provided")
+    value = json.loads(scan_path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"email scan file must contain a JSON object: {scan_path}")
+    return value
+
+
 def send_report(args: argparse.Namespace, report_path: Path, scan: dict[str, Any]) -> Path:
     report_text = report_path.read_text(encoding="utf-8", errors="replace")
     checklist = review_checklist(scan, report_text)
@@ -1509,10 +1554,13 @@ def send_report(args: argparse.Namespace, report_path: Path, scan: dict[str, Any
 def run(args: argparse.Namespace) -> tuple[Path, Path, Path | None]:
     policy = load_link_policy(args.email_link_policy)
     topic_map = load_topic_map(args.email_topic_file)
+    summary_engine = getattr(args, "summary_engine", DEFAULT_SUMMARY_ENGINE)
     if args.scan_file:
-        scan = json.loads(args.scan_file.read_text(encoding="utf-8"))
+        scan = None
+        scan_path = args.scan_file
     elif args.eml_dir:
         scan = scan_eml_dir(args, policy)
+        scan_path = None
     else:
         if not args.allow_imap_read:
             raise RuntimeError(
@@ -1520,27 +1568,39 @@ def run(args: argparse.Namespace) -> tuple[Path, Path, Path | None]:
                 "Re-run with --allow-imap-read after confirming this should access the mailbox."
             )
         scan = scan_imap(args, policy)
-    scan = evidence_agent.build_evidence_pack(scan, policy, topic_map, args.enrich_links, fetch_link_context).to_dict()
-    scan_path = write_scan(args.output, scan)
-    report_path = email_reports_dir(args.output) / f"email-summary-{scan['date']}.md"
-    summary_engine = getattr(args, "summary_engine", DEFAULT_SUMMARY_ENGINE)
-    if summary_engine == "podsum" or args.dry_run:
-        reason = "dry-run: Podsum local summary engine; no external summary engine called" if summary_engine == "podsum" and args.dry_run else ""
-        if summary_engine != "podsum":
-            reason = "dry-run: skipped Hermes summary"
+        scan_path = None
+
+    if summary_engine == "podsum":
+        reason = "dry-run: Podsum local summary engine; no external summary engine called" if args.dry_run else ""
+        scan_path, report_path, persisted_scan = run_podsum_email_graph(
+            args,
+            scan,
+            scan_path,
+            policy,
+            topic_map,
+            reason,
+        )
+        epub_path = None if args.no_send else send_report(args, report_path, persisted_scan)
+        return scan_path, report_path, epub_path
+
+    source_scan = scan if scan is not None else _read_scan_file(scan_path)
+    persisted_scan = evidence_agent.build_evidence_pack(source_scan, policy, topic_map, args.enrich_links, fetch_link_context).to_dict()
+    persisted_scan_path = write_scan(args.output, persisted_scan)
+    report_path = email_reports_dir(args.output) / f"email-summary-{persisted_scan['date']}.md"
+    if args.dry_run:
         composition = brief_agent.compose_and_persist(
-            EmailEvidencePack.from_dict(scan),
+            EmailEvidencePack.from_dict(persisted_scan),
             topic_map,
             email_reports_dir(args.output),
             str(report_path),
             {},
-            reason,
+            "dry-run: skipped Hermes summary",
         )
-        report_path = write_report(args.output, scan, composition.email_intel_brief.markdown)
+        report_path = write_report(args.output, persisted_scan, composition.email_intel_brief.markdown)
     else:
-        report_path = write_report(args.output, scan, render_report(args, scan))
-    epub_path = None if args.no_send else send_report(args, report_path, scan)
-    return scan_path, report_path, epub_path
+        report_path = write_report(args.output, persisted_scan, render_report(args, persisted_scan))
+    epub_path = None if args.no_send else send_report(args, report_path, persisted_scan)
+    return persisted_scan_path, report_path, epub_path
 
 
 def build_parser() -> argparse.ArgumentParser:

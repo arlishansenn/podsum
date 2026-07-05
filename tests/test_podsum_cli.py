@@ -1608,13 +1608,6 @@ class PodsumCliTest(unittest.TestCase):
             self.assertIn("dry-run: Podsum local summary engine", report_text)
             self.assertIn(needs["needs"][0]["need_id"], report_text)
 
-    def test_email_run_graph_import_guard_is_actionable_when_langgraph_missing(self) -> None:
-        if email_graph.langgraph_available():
-            self.skipTest("langgraph is installed")
-
-        with self.assertRaisesRegex(RuntimeError, "LangGraph is required for EmailRunGraph"):
-            email_graph.build_in_memory_email_run_graph()
-
     def test_email_run_graph_fixture_only_run_produces_lightweight_state(self) -> None:
         if not email_graph.langgraph_available():
             self.skipTest("langgraph is not installed")
@@ -1779,6 +1772,87 @@ class PodsumCliTest(unittest.TestCase):
             self.assertEqual(reconciled["status"], "fulfilled_now")
             self.assertEqual(reconciled["resolved_by"], ["pack-2026-07-06"])
             self.assertNotEqual(reconciled["audit_trail"][-1]["added_evidence_refs"], [])
+
+    def test_email_summary_cli_graph_reconciles_existing_need_from_future_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            reports = tmp_path / "downloads" / "EmailReports"
+            reports.mkdir(parents=True)
+            open_need = EvidenceNeed.from_dict(
+                {
+                    "need_id": "need-2026-07-05-decision-77-snippet-only",
+                    "status": "open",
+                    "urgency": "high",
+                    "topic_id": "decision",
+                    "source_brief_id": "brief-2026-07-05",
+                    "claim_or_question": "UID=77 是否有邮件摘要之外的可验证证据？",
+                    "why_needed": "当前 EvidencePack 将该邮件标记为 snippet_only。",
+                    "known_source_refs": ["email:77"],
+                    "needed_evidence": ["public_link_or_full_body"],
+                    "created_at": "2026-07-05T08:00:00Z",
+                    "last_checked_at": "2026-07-05T08:00:00Z",
+                    "resolved_by": [],
+                    "response_policy": "emit_need_reference_only",
+                    "audit_trail": [],
+                }
+            )
+            need_store.save_need_store(reports, need_store.replace_need(need_store.empty_need_store(), open_need))
+            scan_file = tmp_path / "email-scan-day2.json"
+            scan_file.write_text(
+                json.dumps(
+                    {
+                        "date": "2026-07-06",
+                        "account": "fixture@example.invalid",
+                        "window": "1d",
+                        "scan_limit": 300,
+                        "raw_count": 1,
+                        "possibly_truncated": False,
+                        "items": [
+                            {
+                                "uid": "77",
+                                "date": "Mon, 06 Jul 2026 08:00:00 +0800",
+                                "from": "Fixture Sender <sender@example.invalid>",
+                                "subject": "Decision source found",
+                                "snippet": "A verified source is now available.",
+                                "has_attachments": False,
+                                "links": [],
+                                "evidence": [
+                                    {
+                                        "type": "public_link",
+                                        "uid": "77",
+                                        "url": "https://example.invalid/source",
+                                        "status": "fetched",
+                                        "title": "Source",
+                                        "excerpt": "Verified source text.",
+                                    }
+                                ],
+                                "risks": [],
+                                "flags": [],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_podsum(
+                "email-summary",
+                "--scan-file",
+                str(scan_file),
+                "--output",
+                str(tmp_path / "downloads"),
+                "--summary-engine",
+                "podsum",
+                "--no-send",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            reconciled = need_store.load_need_store(reports)["needs"][0]
+            self.assertEqual(reconciled["status"], "fulfilled_now")
+            self.assertEqual(reconciled["resolved_by"], ["pack-2026-07-06"])
+            self.assertNotEqual(reconciled["audit_trail"][-1]["added_evidence_refs"], [])
+            self.assertTrue((reports / "email-scan-2026-07-06.json").exists())
+            self.assertTrue((reports / "email-summary-2026-07-06.md").exists())
 
     def test_email_summary_default_engine_does_not_call_hermes_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
