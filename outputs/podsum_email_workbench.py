@@ -24,6 +24,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 DEFAULT_ROOT = email_summary.DEFAULT_OUTPUT_DIR
 DEFAULT_POLICY_FILE = email_summary.DEFAULT_LINK_POLICY
+DEFAULT_TOPIC_FILE = email_summary.DEFAULT_TOPIC_FILE
 MAX_POST_BYTES = 1024 * 1024
 BRIEF_STATUSES = {"draft", "needs_revision", "approved"}
 REVIEW_MARK_KEYS = {"ignore", "important", "type_override", "needs_link_review"}
@@ -44,6 +45,7 @@ class WorkbenchConfig:
     host: str = DEFAULT_HOST
     port: int = DEFAULT_PORT
     policy_file: Path = DEFAULT_POLICY_FILE
+    topic_file: Path = DEFAULT_TOPIC_FILE
 
     @property
     def reports_dir(self) -> Path:
@@ -138,6 +140,7 @@ def context_payload(config: WorkbenchConfig) -> dict[str, Any]:
         "epub": artifact_info(config.epub_path),
         "review": artifact_info(config.review_path),
         "policy": artifact_info(config.policy_file),
+        "topics": artifact_info(config.topic_file),
     }
     return {
         "date": config.date,
@@ -188,6 +191,35 @@ def policy_payload(config: WorkbenchConfig) -> dict[str, Any]:
         }
 
 
+def topic_payload(config: WorkbenchConfig) -> dict[str, Any]:
+    if not config.topic_file.exists():
+        return {
+            "missing": True,
+            "path": str(config.topic_file),
+            "markdown": "",
+            "topic_map": json.loads(json.dumps(email_summary.DEFAULT_TOPIC_MAP)),
+            "error": "",
+        }
+    markdown = config.topic_file.read_text(encoding="utf-8")
+    try:
+        topic_map = email_summary.parse_topic_json(markdown)
+        return {
+            "missing": False,
+            "path": str(config.topic_file),
+            "markdown": markdown,
+            "topic_map": topic_map,
+            "error": "",
+        }
+    except Exception as exc:
+        return {
+            "missing": False,
+            "path": str(config.topic_file),
+            "markdown": markdown,
+            "topic_map": None,
+            "error": str(exc),
+        }
+
+
 def load_evidence_pack(config: WorkbenchConfig) -> dict[str, Any]:
     review = load_review(config)
     if not config.scan_path.exists():
@@ -201,7 +233,9 @@ def load_evidence_pack(config: WorkbenchConfig) -> dict[str, Any]:
     try:
         scan = json.loads(config.scan_path.read_text(encoding="utf-8"))
         policy = email_summary.load_link_policy(config.policy_file)
+        topic_map = email_summary.load_topic_map(config.topic_file)
         scan = email_summary.normalize_evidence_pack(scan, policy)
+        scan = email_summary.apply_topics(scan, topic_map)
     except Exception as exc:
         return {
             "missing": False,
@@ -338,6 +372,8 @@ def commands_payload(config: WorkbenchConfig) -> dict[str, Any]:
     python = "/usr/bin/python3"
     scan = str(config.scan_path)
     root = str(config.root)
+    policy_file = str(config.policy_file)
+    topic_file = str(config.topic_file)
     commands = {
         "generate_scan_manual_imap": shell_join(
             [
@@ -346,7 +382,13 @@ def commands_payload(config: WorkbenchConfig) -> dict[str, Any]:
                 "email-summary",
                 "--output",
                 root,
+                "--summary-engine",
+                "podsum",
                 "--allow-imap-read",
+                "--email-link-policy",
+                policy_file,
+                "--email-topic-file",
+                topic_file,
                 "--no-send",
             ]
         ),
@@ -359,6 +401,12 @@ def commands_payload(config: WorkbenchConfig) -> dict[str, Any]:
                 scan,
                 "--output",
                 root,
+                "--summary-engine",
+                "podsum",
+                "--email-link-policy",
+                policy_file,
+                "--email-topic-file",
+                topic_file,
                 "--no-send",
             ]
         ),
@@ -371,6 +419,12 @@ def commands_payload(config: WorkbenchConfig) -> dict[str, Any]:
                 scan,
                 "--output",
                 root,
+                "--summary-engine",
+                "podsum",
+                "--email-link-policy",
+                policy_file,
+                "--email-topic-file",
+                topic_file,
                 "--enrich-links",
                 "--no-send",
             ]
@@ -384,13 +438,20 @@ def commands_payload(config: WorkbenchConfig) -> dict[str, Any]:
                 scan,
                 "--output",
                 root,
+                "--summary-engine",
+                "podsum",
+                "--email-link-policy",
+                policy_file,
+                "--email-topic-file",
+                topic_file,
             ]
         ),
     }
     return {
         "commands": commands,
         "notes": [
-            "Workbench only displays commands; it never executes IMAP, Hermes, send, or launchd actions.",
+            "Workbench only displays commands; it never executes IMAP, Hermes summary, send, or launchd actions.",
+            "EmailIntelBrief uses Podsum's local summary engine by default; Hermes is not the email summary engine.",
             "Run manual_delivery_after_approval only after ReviewChecklistPanel passes and the Brief is approved.",
         ],
     }
@@ -438,6 +499,12 @@ def save_review_update(config: WorkbenchConfig, update: dict[str, Any]) -> dict[
 def save_policy(config: WorkbenchConfig, markdown: str) -> dict[str, Any]:
     parsed = email_summary.parse_policy_json(markdown)
     atomic_write_text(config.policy_file, markdown.rstrip() + "\n")
+    return parsed
+
+
+def save_topics(config: WorkbenchConfig, markdown: str) -> dict[str, Any]:
+    parsed = email_summary.parse_topic_json(markdown)
+    atomic_write_text(config.topic_file, markdown.rstrip() + "\n")
     return parsed
 
 
@@ -508,6 +575,8 @@ def make_handler(config: WorkbenchConfig) -> type[BaseHTTPRequestHandler]:
                     json_response(self, 200, {"ok": True, **intel_brief_payload(config)})
                 elif path == "/api/policy":
                     json_response(self, 200, {"ok": True, **policy_payload(config)})
+                elif path == "/api/topics":
+                    json_response(self, 200, {"ok": True, **topic_payload(config)})
                 elif path == "/api/checklist":
                     json_response(self, 200, {"ok": True, **checklist_payload(config)})
                 elif path == "/api/commands":
@@ -532,6 +601,10 @@ def make_handler(config: WorkbenchConfig) -> type[BaseHTTPRequestHandler]:
                     markdown = str(body.get("markdown") or "")
                     policy = save_policy(config, markdown)
                     json_response(self, 200, {"ok": True, "policy": policy})
+                elif path == "/api/topics":
+                    markdown = str(body.get("markdown") or "")
+                    topic_map = save_topics(config, markdown)
+                    json_response(self, 200, {"ok": True, "topic_map": topic_map})
                 else:
                     json_response(self, 404, {"ok": False, "error": "not found"})
             except Exception as exc:
@@ -551,6 +624,7 @@ def run(args: argparse.Namespace) -> int:
         host=args.host,
         port=args.port,
         policy_file=args.policy_file.expanduser(),
+        topic_file=args.topic_file.expanduser(),
     )
     if config.host != "127.0.0.1":
         print("Warning: email-workbench is intended for local use; 127.0.0.1 is the safe default.", flush=True)
@@ -573,6 +647,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--policy-file", type=Path, default=DEFAULT_POLICY_FILE)
+    parser.add_argument("--topic-file", type=Path, default=DEFAULT_TOPIC_FILE)
 
 
 INDEX_HTML = """<!doctype html>
@@ -593,11 +668,24 @@ INDEX_HTML = """<!doctype html>
   </header>
   <main class="shell">
     <nav class="nav">
+      <button class="nav-button" data-view="topics">EmailTopicMap</button>
       <button class="nav-button" data-view="policy">EmailEvidencePolicy</button>
       <button class="nav-button active" data-view="evidence">EmailEvidencePack</button>
       <button class="nav-button" data-view="brief">EmailIntelBrief</button>
     </nav>
     <section class="workspace">
+      <section id="topicsView" class="view">
+        <div class="section-head">
+          <h2>EmailTopicMap</h2>
+          <button id="saveTopics">Save topics</button>
+        </div>
+        <p class="notice">核心可视化工作对象：定义 Hermes 用户正在跟踪的话题。EmailEvidencePack 会按 topic.md 命中邮件，EmailIntelBrief 必须先围绕这些 topic 展开；修改 topic 不会自动重跑已有 summary。</p>
+        <div id="topicSummary" class="topic-summary"></div>
+        <div id="topicGuide" class="topic-guide"></div>
+        <label class="field-label" for="topicEditor">EmailTopicMap spec (advanced)</label>
+        <textarea id="topicEditor" spellcheck="false"></textarea>
+        <div id="topicStatus" class="notice"></div>
+      </section>
       <section id="policyView" class="view">
         <div class="section-head">
           <h2>EmailEvidencePolicy</h2>
@@ -768,19 +856,27 @@ p { margin: 0; }
 .pill.weak, .badge.weak { border-color: #f2c078; color: var(--warn); }
 .pill.failed, .badge.failed { border-color: #f4a29b; color: var(--bad); }
 .pill.skipped, .badge.skipped { border-color: #b8c0cc; color: var(--muted); }
-.stats, .policy-summary {
+.stats, .policy-summary, .topic-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px;
   margin-bottom: 12px;
 }
-.stat, .panel, .detail, .email-row, .brief-rendered, .policy-card {
+.stat, .panel, .detail, .email-row, .brief-rendered, .policy-card, .topic-card {
   background: var(--panel);
   border: 1px solid var(--line);
 }
-.stat, .policy-card { padding: 10px; }
+.stat, .policy-card, .topic-card { padding: 10px; }
 .stat strong { display: block; font-size: 18px; }
-.policy-card strong { display: block; margin-bottom: 6px; }
+.policy-card strong, .topic-card strong { display: block; margin-bottom: 6px; }
+.topic-guide {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.topic-card ul { margin: 6px 0 0 18px; padding: 0; }
+.topic-card li { margin-bottom: 4px; }
 .evidence-grid, .brief-grid {
   display: grid;
   grid-template-columns: minmax(260px, 38%) 1fr;
@@ -840,6 +936,7 @@ textarea {
   background: #fff;
 }
 #policyEditor { min-height: 440px; }
+#topicEditor { min-height: 420px; }
 #briefEditor { min-height: 360px; }
 .brief-rendered {
   min-height: 360px;
@@ -889,6 +986,7 @@ const state = {
   evidence: null,
   brief: null,
   policy: null,
+  topics: null,
   checklist: null,
   commands: null,
   selectedUid: null,
@@ -949,6 +1047,10 @@ function policyForType(emailType) {
     fetch_links: false,
     summary_focus: "",
   };
+}
+
+function topicLabel(topic) {
+  return topic?.name || topic?.id || "unknown topic";
 }
 
 function evidenceByType(item, evidenceType) {
@@ -1051,13 +1153,14 @@ function renderEvidence() {
     const uid = String(item.uid || "");
     const health = evidenceHealth(item);
     const riskBadges = (item.risks || []).slice(0, 3).map((risk) => badge(risk, "warn")).join(" ");
+    const topicBadges = (item.topics || []).slice(0, 3).map((topic) => badge(topicLabel(topic), "usable")).join(" ");
     const linkCount = (item.links || []).length;
     const pendingLinks = (item.links || []).filter((link) => !link.policy_decision || link.policy_decision === "pending").length;
     return `<button class="email-row ${uid === state.selectedUid ? "selected" : ""}" data-uid="${escapeHtml(uid)}">
       <h4>${escapeHtml(item.subject || "(no subject)")}</h4>
       <div class="meta">UID ${escapeHtml(uid)} · ${escapeHtml(item.email_type || "unknown")} · ${linkCount} links</div>
       <div class="meta">${escapeHtml(item.from || "")}</div>
-      <div>${badge(healthLabel(health), health)} ${pendingLinks ? badge(`${pendingLinks} pending links`, "warn") : ""} ${riskBadges} ${review.important ? badge("important", "good") : ""} ${review.ignore ? badge("ignored", "bad") : ""}</div>
+      <div>${badge(healthLabel(health), health)} ${topicBadges} ${pendingLinks ? badge(`${pendingLinks} pending links`, "warn") : ""} ${riskBadges} ${review.important ? badge("important", "good") : ""} ${review.ignore ? badge("ignored", "bad") : ""}</div>
     </button>`;
   }).join("");
   for (const row of document.querySelectorAll(".email-row")) {
@@ -1113,17 +1216,26 @@ function renderEmailDetail(item) {
       <br><span class="meta">${escapeHtml(ev.excerpt || "")}</span>
     </li>`).join("");
   const riskBadges = (item.risks || []).map((risk) => badge(risk, "warn")).join(" ");
+  const topicRows = (item.topics || []).map((topic) => `<li>
+      ${badge(topicLabel(topic), topic.priority === "high" ? "good" : "usable")}
+      <span class="meta">matched: ${escapeHtml((topic.matched_keywords || []).join(", "))}</span>
+      <br><span class="meta">${escapeHtml(topic.description || "")}</span>
+      <br><span class="meta">${escapeHtml(topic.summary_focus || "")}</span>
+    </li>`).join("");
   target.innerHTML = `
     <h3>${escapeHtml(item.subject || "(no subject)")}</h3>
     <p class="meta">UID ${escapeHtml(uid)} · ${escapeHtml(item.date || "")}</p>
     <p class="meta">${escapeHtml(item.from || "")}</p>
     <p>${badge(item.email_type || "unknown")} ${badge(healthLabel(health), health)} ${item.has_attachments ? badge("attachment", "warn") : ""}</p>
 
-    <h3>1. Base Evidence</h3>
+    <h3>1. Topic Match</h3>
+    <ul>${topicRows || "<li>No EmailTopicMap match.</li>"}</ul>
+
+    <h3>2. Base Evidence</h3>
     <p class="meta">${escapeHtml(baseEvidence.status || "available")} · ${escapeHtml(baseEvidence.reason || "email_snippet")}</p>
     <pre>${escapeHtml(baseEvidence.excerpt || item.snippet || "")}</pre>
 
-    <h3>2. Link Decision</h3>
+    <h3>3. Link Decision</h3>
     <p>${badge(policy.fetch_links ? "fetch links" : "snippet only", policy.fetch_links ? "good" : "skipped")} ${escapeHtml(policy.summary_focus || "")}</p>
     <p class="notice">${escapeHtml(nextAction)}</p>
     <table>
@@ -1131,10 +1243,10 @@ function renderEmailDetail(item) {
       <tbody>${linkRows || `<tr><td colspan="4">No links detected.</td></tr>`}</tbody>
     </table>
 
-    <h3>3. Link Evidence</h3>
+    <h3>4. Link Evidence</h3>
     <ul>${evidenceRows || "<li>No public link evidence.</li>"}</ul>
 
-    <h3>4. Risks</h3>
+    <h3>5. Risks</h3>
     <p>${riskBadges || badge("none", "good")}</p>
 
     <h3>Review marks</h3>
@@ -1187,6 +1299,56 @@ function renderPolicy() {
   renderPolicySummary();
 }
 
+function renderTopics() {
+  document.getElementById("topicEditor").value = state.topics?.markdown || "";
+  document.getElementById("topicStatus").textContent = state.topics?.error
+    ? `Topic parse error: ${state.topics.error}`
+    : `Topic map loaded from ${state.topics?.path || ""}`;
+  renderTopicSummary();
+  renderTopicGuide();
+}
+
+function renderTopicSummary() {
+  const topicMap = state.topics?.topic_map;
+  const target = document.getElementById("topicSummary");
+  if (!topicMap) {
+    target.innerHTML = `<div class="topic-card">${badge("invalid", "bad")} Topic JSON cannot be parsed.</div>`;
+    return;
+  }
+  const topics = topicMap.topics || [];
+  const priorities = countBy(topics, (topic) => topic.priority || "normal");
+  const keywordCount = topics.reduce((sum, topic) => sum + ((topic.keywords || []).length), 0);
+  const highTopics = topics.filter((topic) => topic.priority === "high").map((topic) => topicLabel(topic));
+  target.innerHTML = [
+    `<div class="topic-card"><strong>1. Tracked Topics</strong><p>${escapeHtml(topics.map((topic) => topicLabel(topic)).join(", ") || "none")}</p></div>`,
+    `<div class="topic-card"><strong>2. Priority</strong><p>high: ${escapeHtml(priorities.high || 0)} · medium: ${escapeHtml(priorities.medium || 0)} · low: ${escapeHtml(priorities.low || 0)}</p>${highTopics.map((name) => badge(name, "good")).join(" ") || badge("no high priority", "warn")}</div>`,
+    `<div class="topic-card"><strong>3. Match Surface</strong><p>${escapeHtml(keywordCount)} keywords / aliases. Matching uses sender, subject, snippet, links and evidence excerpts.</p></div>`,
+    `<div class="topic-card"><strong>4. Default Behavior</strong><p>${escapeHtml(topicMap.default_behavior || "")}</p></div>`,
+  ].join("");
+}
+
+function renderTopicGuide() {
+  const topics = state.topics?.topic_map?.topics || [];
+  const target = document.getElementById("topicGuide");
+  if (!topics.length) {
+    target.innerHTML = `<div class="topic-card">${badge("empty", "warn")} No tracked topics.</div>`;
+    return;
+  }
+  target.innerHTML = topics.map((topic) => {
+    const examples = (topic.examples || []).slice(0, 3).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+    const nonExamples = (topic.non_examples || []).slice(0, 2).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+    return `<div class="topic-card">
+      <strong>${escapeHtml(topicLabel(topic))}</strong>
+      <p>${escapeHtml(topic.description || topic.summary_focus || "")}</p>
+      <p class="meta">priority: ${escapeHtml(topic.priority || "normal")} · keywords: ${escapeHtml((topic.keywords || []).length)}</p>
+      <p class="meta">Examples</p>
+      <ul>${examples || "<li>No examples.</li>"}</ul>
+      <p class="meta">Not this</p>
+      <ul>${nonExamples || "<li>No non-examples.</li>"}</ul>
+    </div>`;
+  }).join("");
+}
+
 function renderPolicySummary() {
   const policy = state.policy?.policy;
   const target = document.getElementById("policySummary");
@@ -1234,6 +1396,7 @@ function showView(view) {
   for (const button of document.querySelectorAll(".nav-button")) {
     button.classList.toggle("active", button.dataset.view === view);
   }
+  document.getElementById("topicsView").classList.toggle("active", view === "topics");
   document.getElementById("evidenceView").classList.toggle("active", view === "evidence");
   document.getElementById("policyView").classList.toggle("active", view === "policy");
   document.getElementById("briefView").classList.toggle("active", view === "brief");
@@ -1245,19 +1408,21 @@ async function saveReview(update) {
 }
 
 async function refresh() {
-  const [context, evidence, brief, policy, checklist, commands] = await Promise.all([
+  const [context, evidence, brief, policy, topics, checklist, commands] = await Promise.all([
     api("/api/context"),
     api("/api/evidence-pack"),
     api("/api/intel-brief"),
     api("/api/policy"),
+    api("/api/topics"),
     api("/api/checklist"),
     api("/api/commands"),
   ]);
-  Object.assign(state, { context, evidence, brief, policy, checklist, commands });
+  Object.assign(state, { context, evidence, brief, policy, topics, checklist, commands });
   renderContext();
   renderEvidence();
   renderBrief();
   renderPolicy();
+  renderTopics();
   renderChecklist();
   renderCommands();
 }
@@ -1302,6 +1467,19 @@ function bindEvents() {
       await refresh();
     } catch (error) {
       status.textContent = `Policy save failed: ${error.message}`;
+    }
+  });
+  document.getElementById("saveTopics").addEventListener("click", async () => {
+    const status = document.getElementById("topicStatus");
+    try {
+      await api("/api/topics", {
+        method: "POST",
+        body: JSON.stringify({ markdown: document.getElementById("topicEditor").value }),
+      });
+      status.textContent = "Topics saved. Regenerate EvidencePack/Brief to apply topic changes.";
+      await refresh();
+    } catch (error) {
+      status.textContent = `Topic save failed: ${error.message}`;
     }
   });
 }

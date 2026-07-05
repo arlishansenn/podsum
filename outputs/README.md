@@ -3,10 +3,10 @@
 Podsum runs on `macmini`. It uses one stateful runner to download the latest podcast episode per feed, transcribe completed audio locally with `mlx-whisper`, write Markdown transcripts, generate Hermes deep interpretations, merge them into one Markdown report, convert that report to EPUB, and send the EPUB to Discord.
 
 It also owns the migrated OpenClaw email-summary workflow as an opt-in feature:
-scan recent IMAP/Gmail messages, write a structured scan JSON file, ask Hermes
-for a daily summary, convert the summary to EPUB, and send it through the same
-delivery target. Offline validation can run from sanitized `.eml` fixtures
-without touching Gmail.
+scan recent IMAP/Gmail messages, write a structured scan JSON file, generate a
+Podsum-owned daily EmailIntelBrief, convert the summary to EPUB, and send it
+through the same delivery target. Offline validation can run from sanitized
+`.eml` fixtures without touching Gmail.
 
 ## Runtime
 
@@ -215,8 +215,8 @@ Email summary verification has three levels:
 1. Fixture offline: use `--eml-dir` or `--scan-file` with `--dry-run --no-send`.
    This validates parsing and local artifacts without IMAP, Hermes, or delivery.
 2. Real scan no-send: use an existing `EmailReports/email-scan-YYYY-MM-DD.json`
-   with `--scan-file --no-send`. This validates Hermes summary generation
-   without rereading IMAP or sending.
+   with `--scan-file --summary-engine podsum --no-send`. This validates the
+   Podsum local summary engine without rereading IMAP or sending.
 3. Real delivery manual approval: remove `--no-send` only after explicitly
    approving a live send. Do not add `--email-summary` to launchd until that
    manual delivery path has been accepted.
@@ -224,17 +224,28 @@ Email summary verification has three levels:
 Example real-scan validation:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --scan-file "$HOME/Podcasts/AutoDownloads/EmailReports/email-scan-YYYY-MM-DD.json" --no-send
+/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --scan-file "$HOME/Podcasts/AutoDownloads/EmailReports/email-scan-YYYY-MM-DD.json" --summary-engine podsum --email-topic-file "/Users/admin/Library/Application Support/Podsum/outputs/topic.md" --no-send
 ```
 
 Email summary is moving toward a compact VIS-style Workbench model:
 
 ```text
-EmailEvidencePolicy -> EmailEvidencePack -> EmailIntelBrief -> ReviewChecklistPanel -> EPUB / Delivery
+EmailTopicMap + EmailEvidencePolicy -> EmailEvidencePack -> EmailIntelBrief -> ReviewChecklistPanel -> EPUB / Delivery
 ```
 
-- `EmailEvidencePolicy`, `EmailEvidencePack` and `EmailIntelBrief` are the three
-  core visual work objects.
+- `EmailTopicMap`, `EmailEvidencePolicy`, `EmailEvidencePack` and
+  `EmailIntelBrief` are the four core visual work objects.
+- `EmailTopicMap` is the tracked-topic spec at `outputs/topic.md`. Summary
+  generation first groups evidence by these topics; non-topic mail is only
+  handled afterward as action items or lower-priority context.
+- In the EmailIntelBrief artifact, `EmailTopicMap` is recorded as the guiding
+  object and `EmailEvidencePack` as the source object:
+  `EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief`.
+- Podsum owns topic matching and email brief generation. The default
+  `--summary-engine podsum` path does not call Hermes. If an external engine is
+  explicitly used later, it should receive only the normalized
+  `EmailEvidencePack` with `topic_hits` and `items[].topics`, not the full
+  `topic.md` JSON as a separate prompt input.
 - `EmailEvidencePolicy` is the declarative evidence policy spec at
   `outputs/email_link_policy.md`. It controls classification, link enrichment,
   skip rules and evidence boundaries before evidence is generated. The GUI view
@@ -246,6 +257,8 @@ EmailEvidencePolicy -> EmailEvidencePack -> EmailIntelBrief -> ReviewChecklistPa
   evidence and risks while staying compatible with older scan JSON files. Each
   item always gets an `email_snippet` evidence entry from the email metadata and
   snippet; `public_link` evidence is appended only when link enrichment runs.
+- EvidencePack also carries `items[].topics` and `topic_hits` after applying
+  `EmailTopicMap`.
 - EvidencePack `object_version` is `0.1`. The fill path extracts MIME body
   shape, attachment shape, URL candidates and local link context from email
   bodies without storing full raw email. Older scan JSON is normalized by
@@ -253,10 +266,11 @@ EmailEvidencePolicy -> EmailEvidencePack -> EmailIntelBrief -> ReviewChecklistPa
 - `EmailIntelBrief` is still written as
   `EmailReports/email-summary-YYYY-MM-DD.md`. It includes a Review Checklist
   section as the quality gate view.
-- EmailIntelBrief `object_version` is `0.1`. Dry-run and Hermes-failure paths now
+- EmailIntelBrief `object_version` is `0.1`. Dry-run and local-engine paths now
   produce a reviewable brief draft from EvidencePack instead of a blank failure
-  report: key takeaway, action/worth/ignore sections, source index, snippet-only
-  warnings and truncated-window warnings are preserved for Workbench review.
+  report: key takeaway, tracked-topic sections, non-topic action/worth/ignore
+  sections, source index, snippet-only warnings and truncated-window warnings are
+  preserved for Workbench review.
 
 The full Email Summary master plan lives at:
 
@@ -269,15 +283,15 @@ artifacts, writes `EmailReports/email-review-YYYY-MM-DD.json` for human review
 state, and does not read IMAP, call Hermes, send, or modify launchd:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-workbench --root "$HOME/Podcasts/AutoDownloads" --date YYYY-MM-DD --host 127.0.0.1 --port 8765
+/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-workbench --root "$HOME/Podcasts/AutoDownloads" --date YYYY-MM-DD --host 127.0.0.1 --port 8765 --topic-file "/Users/admin/Library/Application Support/Podsum/outputs/topic.md"
 ```
 
 By default Podsum extracts links but does not fetch external pages. To enrich
 public article links explicitly:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --allow-imap-read --enrich-links
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --scan-file "$HOME/Podcasts/AutoDownloads/EmailReports/email-scan-YYYY-MM-DD.json" --enrich-links --no-send
+/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --allow-imap-read --summary-engine podsum --enrich-links
+/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --scan-file "$HOME/Podcasts/AutoDownloads/EmailReports/email-scan-YYYY-MM-DD.json" --summary-engine podsum --email-topic-file "/Users/admin/Library/Application Support/Podsum/outputs/topic.md" --enrich-links --no-send
 ```
 
 `--enrich-links` only fetches public `http`/`https` HTML links allowed by

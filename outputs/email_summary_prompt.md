@@ -3,6 +3,7 @@
 目标：
 - 让华哥看完摘要后，基本不需要再打开邮箱逐封确认。
 - 从邮件 metadata、snippet、links、evidence 和 risks 里提炼“今天有哪些值得处理、值得知道、可以忽略的事”。
+- 必须优先围绕 EmailEvidencePack 中已经命中的 `topic_hits` 和 `items[].topics` 组织摘要；没有命中 topic 的邮件只能作为低优先级补充。
 - 给出判断和行动建议，但每个判断都必须能回到邮件来源。
 
 硬性要求：
@@ -14,6 +15,7 @@
 - 当只有 email_snippet、没有 fetched public_link evidence 时，必须标注“仅基于邮件摘要”或“待外部验证”。
 - 只使用输入 JSON 中的 metadata、snippet、links、evidence、risks，不编造邮件正文或网页内容。
 - 覆盖全部 items，不只看前几封。
+- 先按 EvidencePack 的 `topic_hits` 展开命中的邮件，再处理没有命中 topic 但有行动信号的邮件。
 - 高价值线索必须保留 UID、From、Subject、Date 与 `email://{{scan_date}}/{{uid}}` 溯源键。
 - 如果输入证据不足，只能写“待外部验证”，不要补背景、猜结论或替邮件作者扩写。
 - 如果 possibly_truncated=true，必须提示“触达上限，可能有遗漏”。
@@ -35,24 +37,40 @@
 对象: EmailIntelBrief
 版本: 0.1
 来源对象: EmailEvidencePack
+引导对象: EmailTopicMap
+处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief
 
 ## key takeaway
 
 用 2-4 句说明今天邮件里真正值得华哥注意的新信息、风险或机会。不要泛泛说“有若干邮件需要关注”。
 
+## 跟踪话题
+
+按 EmailEvidencePack 的 `topic_hits` 展开。每个命中的 topic 用三级标题：
+
+### {{topic name}}
+
+每个 topic 下面列出命中的邮件，并说明：
+- 为什么命中这个 topic。
+- 这个 topic 下的新信息、风险或机会是什么。
+- 证据缺口是什么。
+- 来源：UID / From / Subject / Date / `email://...`
+
+如果没有命中任何 topic，写“本次没有命中 topic.md 中的跟踪话题”。
+
 ## 需要处理
 
-列出必须行动或建议行动的邮件。每条写清楚：
+列出没有被 topic 覆盖、但必须行动或建议行动的邮件。每条写清楚：
 - 结论：这封邮件要怎么处理。
 - 依据：引用 snippet 或元数据里的具体信号。
 - 建议动作：下一步做什么。
 - 来源：UID / From / Subject / Date / `email://...`
 
-如果没有需要处理的邮件，写“今天没有明确需要处理的邮件”。
+如果没有需要处理的邮件，写“topic 之外今天没有明确需要处理的邮件”。
 
 ## 值得知道
 
-列出不一定要行动、但值得记住的线索。每条写清楚：
+列出没有被 topic 覆盖、不一定要行动、但值得记住的线索。每条写清楚：
 - 这件事是什么。
 - 为什么值得知道。
 - 可信度或缺口是什么。

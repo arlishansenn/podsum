@@ -31,9 +31,11 @@ DEFAULT_OUTPUT_DIR = Path.home() / "Podcasts/AutoDownloads"
 DEFAULT_ENV_FILE = Path.home() / "Library/Application Support/Podsum/.env"
 DEFAULT_PROMPT = Path(__file__).with_name("email_summary_prompt.md")
 DEFAULT_LINK_POLICY = Path(__file__).with_name("email_link_policy.md")
+DEFAULT_TOPIC_FILE = Path(__file__).with_name("topic.md")
 DEFAULT_STATE_FILE = Path.home() / "Library/Application Support/Podsum/state.json"
 DEFAULT_HERMES = sender.DEFAULT_HERMES
 DEFAULT_TARGET = sender.DEFAULT_TARGET
+DEFAULT_SUMMARY_ENGINE = "podsum"
 DEFAULT_IMAP_HOST = "imap.gmail.com"
 DEFAULT_IMAP_PORT = 993
 DEFAULT_MAILBOX = "INBOX"
@@ -123,6 +125,13 @@ DEFAULT_POLICY: dict[str, Any] = {
             "summary_focus": "默认低信号，除非 snippet 显示明确行动价值。",
         },
     ],
+}
+
+DEFAULT_TOPIC_MAP: dict[str, Any] = {
+    "object_type": "email_topic_map",
+    "version": 1,
+    "topics": [],
+    "default_behavior": "未命中 topic.md 的邮件只做低优先级补充，除非存在明确行动信号。",
 }
 
 
@@ -340,6 +349,19 @@ def parse_policy_json(markdown: str) -> dict[str, Any]:
     return parsed
 
 
+def parse_topic_json(markdown: str) -> dict[str, Any]:
+    match = re.search(r"```json\s*(\{.*?\})\s*```", markdown, flags=re.DOTALL | re.IGNORECASE)
+    if not match:
+        raise ValueError("topic map must contain a fenced json object")
+    parsed = json.loads(match.group(1))
+    if not isinstance(parsed, dict):
+        raise ValueError("topic map json must be an object")
+    topics = parsed.get("topics", [])
+    if not isinstance(topics, list):
+        raise ValueError("topic map json field topics must be a list")
+    return parsed
+
+
 def load_link_policy(path: Path) -> dict[str, Any]:
     if not path.exists():
         return json.loads(json.dumps(DEFAULT_POLICY))
@@ -354,6 +376,20 @@ def load_link_policy(path: Path) -> dict[str, Any]:
     default_policy.setdefault("skip_url_patterns", policy.get("skip_url_patterns", DEFAULT_POLICY["skip_url_patterns"]))
     default_policy.setdefault("email_types", policy.get("email_types", DEFAULT_POLICY["email_types"]))
     return default_policy
+
+
+def load_topic_map(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return json.loads(json.dumps(DEFAULT_TOPIC_MAP))
+    try:
+        topic_map = parse_topic_json(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log(f"Email topic map failed to load; using empty topic map: {exc}")
+        return json.loads(json.dumps(DEFAULT_TOPIC_MAP))
+    default_topic_map = json.loads(json.dumps(DEFAULT_TOPIC_MAP))
+    default_topic_map.update(topic_map)
+    default_topic_map.setdefault("topics", topic_map.get("topics", []))
+    return default_topic_map
 
 
 def match_values(haystack: str, needles: list[str]) -> bool:
@@ -384,6 +420,102 @@ def policy_for_type(email_type: str, policy: dict[str, Any]) -> dict[str, Any]:
         if isinstance(entry, dict) and entry.get("name") == email_type:
             return entry
     return {"name": "unknown", "fetch_links": False}
+
+
+def topic_priority_value(topic: dict[str, Any]) -> int:
+    priority = str(topic.get("priority") or "normal").lower()
+    return {"high": 0, "medium": 1, "normal": 1, "low": 2}.get(priority, 1)
+
+
+def topic_keywords(topic: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    for key in ("keywords", "aliases"):
+        raw = topic.get(key, [])
+        if isinstance(raw, list):
+            values.extend(str(item) for item in raw if str(item).strip())
+    return values
+
+
+def item_topic_text(item: dict[str, Any]) -> str:
+    parts = [
+        str(item.get("from") or ""),
+        str(item.get("subject") or ""),
+        str(item.get("snippet") or ""),
+        str(item.get("email_type") or ""),
+    ]
+    for link in item.get("links", []):
+        if not isinstance(link, dict):
+            continue
+        parts.extend([str(link.get("anchor_text") or ""), str(link.get("context") or ""), str(link.get("url") or "")])
+    for evidence in item.get("evidence", []):
+        if not isinstance(evidence, dict):
+            continue
+        parts.extend([str(evidence.get("title") or ""), str(evidence.get("excerpt") or ""), str(evidence.get("email_context") or "")])
+    return "\n".join(parts).lower()
+
+
+def match_item_topics(item: dict[str, Any], topic_map: dict[str, Any]) -> list[dict[str, Any]]:
+    haystack = item_topic_text(item)
+    matches: list[dict[str, Any]] = []
+    for index, topic in enumerate(topic_map.get("topics", [])):
+        if not isinstance(topic, dict):
+            continue
+        keywords = topic_keywords(topic)
+        matched = [keyword for keyword in keywords if keyword.lower() in haystack]
+        if not matched:
+            continue
+        topic_id = str(topic.get("id") or topic.get("name") or f"topic_{index + 1}")
+        matches.append(
+            {
+                "id": topic_id,
+                "name": str(topic.get("name") or topic_id),
+                "priority": str(topic.get("priority") or "normal"),
+                "description": str(topic.get("description") or ""),
+                "summary_focus": str(topic.get("summary_focus") or ""),
+                "examples": [str(item) for item in topic.get("examples", []) if str(item).strip()]
+                if isinstance(topic.get("examples"), list)
+                else [],
+                "matched_keywords": matched[:8],
+                "order": index,
+            }
+        )
+    return sorted(matches, key=lambda value: (topic_priority_value(value), int(value.get("order", 0)), value.get("name", "")))
+
+
+def apply_topics(scan: dict[str, Any], topic_map: dict[str, Any]) -> dict[str, Any]:
+    topic_map_view = {
+        "object_type": topic_map.get("object_type", "email_topic_map"),
+        "version": topic_map.get("version", 1),
+        "topic_count": len([topic for topic in topic_map.get("topics", []) if isinstance(topic, dict)]),
+        "default_behavior": topic_map.get("default_behavior", DEFAULT_TOPIC_MAP["default_behavior"]),
+    }
+    scan["topic_map"] = topic_map_view
+    hits: dict[str, dict[str, Any]] = {}
+    for item in scan.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        topics = match_item_topics(item, topic_map)
+        item["topics"] = topics
+        for topic in topics:
+            topic_id = str(topic.get("id") or "")
+            if not topic_id:
+                continue
+            hit = hits.setdefault(
+                topic_id,
+                {
+                    "id": topic_id,
+                    "name": topic.get("name", topic_id),
+                    "priority": topic.get("priority", "normal"),
+                    "description": topic.get("description", ""),
+                    "summary_focus": topic.get("summary_focus", ""),
+                    "item_uids": [],
+                    "matched_keywords": [],
+                },
+            )
+            hit["item_uids"].append(str(item.get("uid") or ""))
+            hit["matched_keywords"] = sorted(set(hit["matched_keywords"]) | set(topic.get("matched_keywords", [])))
+    scan["topic_hits"] = sorted(hits.values(), key=lambda value: (topic_priority_value(value), value.get("name", "")))
+    return scan
 
 
 def decode_bytes(value: bytes, charset: str | None = None) -> str:
@@ -870,8 +1002,11 @@ def review_checklist(scan: dict[str, Any], markdown: str) -> dict[str, Any]:
         for evidence in item.get("evidence", [])
         if isinstance(evidence, dict)
     )
+    topic_count = int(scan.get("topic_map", {}).get("topic_count") or 0) if isinstance(scan.get("topic_map"), dict) else 0
+    has_topic_contract = topic_count > 0 or bool(scan.get("topic_hits"))
     checklist = {
         "has_key_takeaway": "key takeaway" in markdown.lower(),
+        "has_topic_expansion": (not has_topic_contract) or "跟踪话题" in markdown or "topic.md" in markdown,
         "has_source_index": "来源索引" in markdown or "source" in markdown.lower(),
         "has_uid_trace": "UID" in markdown,
         "has_truncated_warning": (not scan.get("possibly_truncated")) or "触达上限" in markdown or "可能有遗漏" in markdown,
@@ -1086,7 +1221,7 @@ def classify_brief_items(scan: dict[str, Any]) -> tuple[list[dict[str, Any]], li
         has_links = bool(item.get("links"))
         if email_type in {"personal", "transactional"} or item.get("has_attachments"):
             need_action.append(item)
-        elif email_type in {"google_alert", "newsletter_article", "digest"} or fetched_public_link_evidence(item) or has_links:
+        elif item.get("topics") or email_type in {"google_alert", "newsletter_article", "digest"} or fetched_public_link_evidence(item) or has_links:
             worth_knowing.append(item)
         elif "metadata_only" in risks:
             ignore.append(item)
@@ -1105,9 +1240,46 @@ def brief_type_distribution(scan: dict[str, Any]) -> str:
     return "，".join(f"{key} {value} 封" for key, value in sorted(counts.items())) or "无邮件"
 
 
+def topic_groups(scan: dict[str, Any]) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    for hit in scan.get("topic_hits", []):
+        if not isinstance(hit, dict):
+            continue
+        uids = {str(uid) for uid in hit.get("item_uids", [])}
+        items = [
+            item
+            for item in scan.get("items", [])
+            if isinstance(item, dict) and str(item.get("uid") or "") in uids
+        ]
+        if not items:
+            continue
+        group = dict(hit)
+        group["items"] = items
+        groups.append(group)
+    return groups
+
+
+def topic_name_list(scan: dict[str, Any]) -> str:
+    names = [str(hit.get("name") or hit.get("id")) for hit in scan.get("topic_hits", []) if isinstance(hit, dict)]
+    return "，".join(names) if names else "未命中 topic.md 中的跟踪话题"
+
+
+def topic_map_source_line(scan: dict[str, Any]) -> str:
+    topic_map = scan.get("topic_map", {}) if isinstance(scan.get("topic_map"), dict) else {}
+    version = topic_map.get("version", "")
+    topic_count = topic_map.get("topic_count", 0)
+    return f"EmailTopicMap v{version} ({topic_count} topics)"
+
+
 def build_intel_brief_draft(scan: dict[str, Any], reason: str = "") -> str:
     items = [item for item in scan.get("items", []) if isinstance(item, dict)]
     need_action, worth_knowing, ignore = classify_brief_items(scan)
+    topic_hit_uids = {
+        str(uid)
+        for hit in scan.get("topic_hits", [])
+        if isinstance(hit, dict)
+        for uid in hit.get("item_uids", [])
+    }
     link_count = sum(len(item.get("links", []) if isinstance(item.get("links"), list) else []) for item in items)
     fetched_count = sum(len(fetched_public_link_evidence(item)) for item in items)
     lines = [
@@ -1120,6 +1292,8 @@ def build_intel_brief_draft(scan: dict[str, Any], reason: str = "") -> str:
         f"对象: EmailIntelBrief",
         f"版本: {INTEL_BRIEF_VERSION}",
         f"来源对象: EmailEvidencePack {scan.get('object_version', '')}",
+        f"引导对象: {topic_map_source_line(scan)}",
+        f"处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief",
         "",
         "## key takeaway",
         "",
@@ -1132,6 +1306,7 @@ def build_intel_brief_draft(scan: dict[str, Any], reason: str = "") -> str:
         lines.extend(
             [
                 f"本次 EvidencePack 含 {len(items)} 封邮件，类型分布：{brief_type_distribution(scan)}。",
+                f"topic.md 命中：{topic_name_list(scan)}。",
                 f"邮件中共发现 {link_count} 个链接候选，已取得公开网页 evidence {fetched_count} 条；没有公开网页 evidence 的判断均标注为仅基于邮件摘要或待外部验证。",
                 "",
             ]
@@ -1139,33 +1314,64 @@ def build_intel_brief_draft(scan: dict[str, Any], reason: str = "") -> str:
     if reason:
         lines.extend(["## 生成说明", "", reason, ""])
 
+    lines.extend(["## 跟踪话题", ""])
+    groups = topic_groups(scan)
+    if groups:
+        for group in groups:
+            matched = "，".join(group.get("matched_keywords", [])[:8])
+            focus = str(group.get("summary_focus") or "")
+            lines.extend(
+                [
+                    f"### {group.get('name')}",
+                    "",
+                    f"- 关注点：{focus or 'topic.md 未填写 summary_focus'}",
+                    f"- 命中关键词：{matched or '未记录'}",
+                    "",
+                ]
+            )
+            for item in group["items"]:
+                lines.extend(
+                    item_brief_block(
+                        scan,
+                        item,
+                        conclusion="这封邮件命中 topic.md 中的跟踪话题。",
+                        action="围绕该 topic 判断是否需要记录、转入项目资料或进一步打开原文。",
+                    )
+                )
+            lines.append("")
+    else:
+        default_behavior = scan.get("topic_map", {}).get("default_behavior", DEFAULT_TOPIC_MAP["default_behavior"])
+        lines.append(f"本次没有命中 topic.md 中的跟踪话题。{default_behavior}")
+
+    non_topic_need_action = [item for item in need_action if str(item.get("uid") or "") not in topic_hit_uids]
     lines.extend(["## 需要处理", ""])
-    if need_action:
-        for item in need_action:
+    if non_topic_need_action:
+        for item in non_topic_need_action:
             lines.extend(
                 item_brief_block(
                     scan,
                     item,
-                    conclusion="这封邮件可能需要人工确认或后续动作。",
+                    conclusion="这封邮件没有命中 topic.md，但可能需要人工确认或后续动作。",
                     action="打开来源邮件核对完整正文，再决定回复、归档或转交。",
                 )
             )
     else:
-        lines.append("今天没有明确需要处理的邮件。")
+        lines.append("topic 之外今天没有明确需要处理的邮件。")
 
     lines.extend(["", "## 值得知道", ""])
-    if worth_knowing:
-        for item in worth_knowing:
+    non_topic_worth = [item for item in worth_knowing if str(item.get("uid") or "") not in topic_hit_uids]
+    if non_topic_worth:
+        for item in non_topic_worth:
             lines.extend(
                 item_brief_block(
                     scan,
                     item,
-                    conclusion="这封邮件包含值得记录或后续阅读的线索。",
-                    action="优先查看邮件里的原始链接；当前结论待外部验证。",
+                    conclusion="这封邮件没有命中 topic.md，但包含值得记录或后续阅读的线索。",
+                    action="先低优先级保留；如果反复出现，应补充到 topic.md。",
                 )
             )
     else:
-        lines.append("今天没有明显值得单独记录的邮件线索。")
+        lines.append("topic.md 未覆盖之外，没有明显值得单独记录的邮件线索。")
 
     lines.extend(["", "## 可以忽略", ""])
     if ignore:
@@ -1178,7 +1384,21 @@ def build_intel_brief_draft(scan: dict[str, Any], reason: str = "") -> str:
     else:
         lines.append("没有需要合并忽略的邮件。")
 
-    top_items = (need_action + worth_knowing)[:3]
+    topic_items = [
+        item
+        for group in groups
+        for item in group["items"]
+    ]
+    top_items: list[dict[str, Any]] = []
+    seen_top_uids: set[str] = set()
+    for item in topic_items + non_topic_need_action + non_topic_worth:
+        uid = str(item.get("uid") or "")
+        if uid in seen_top_uids:
+            continue
+        seen_top_uids.add(uid)
+        top_items.append(item)
+        if len(top_items) >= 3:
+            break
     lines.extend(["", "## 如果只记三件事", ""])
     if top_items:
         for item in top_items:
@@ -1219,6 +1439,12 @@ def ensure_intel_brief_traceability(markdown: str, scan: dict[str, Any]) -> str:
 
 
 def render_report(args: argparse.Namespace, scan: dict[str, Any]) -> str:
+    summary_engine = getattr(args, "summary_engine", DEFAULT_SUMMARY_ENGINE)
+    if summary_engine == "podsum":
+        reason = "dry-run: Podsum local summary engine; no external summary engine called" if args.dry_run else ""
+        return append_review_checklist(build_intel_brief_draft(scan, reason), scan)
+    if args.dry_run:
+        return append_review_checklist(build_intel_brief_draft(scan, "dry-run: skipped Hermes summary"), scan)
     scan_json = json.dumps(scan, ensure_ascii=False, indent=2)
     prompt = args.email_summary_prompt.read_text(encoding="utf-8").format(
         date=scan["date"],
@@ -1229,8 +1455,6 @@ def render_report(args: argparse.Namespace, scan: dict[str, Any]) -> str:
         scan_date=scan["date"],
         scan_json=scan_json,
     )
-    if args.dry_run:
-        return append_review_checklist(build_intel_brief_draft(scan, "dry-run: skipped Hermes summary"), scan)
     ok, value = run_hermes_prompt(str(args.hermes), prompt, cwd=str(args.project_dir), timeout=args.hermes_timeout)
     if not ok:
         return append_review_checklist(build_intel_brief_draft(scan, f"Hermes 摘要失败：{value}"), scan)
@@ -1272,6 +1496,7 @@ def send_report(args: argparse.Namespace, report_path: Path, scan: dict[str, Any
 
 def run(args: argparse.Namespace) -> tuple[Path, Path, Path | None]:
     policy = load_link_policy(args.email_link_policy)
+    topic_map = load_topic_map(args.email_topic_file)
     if args.scan_file:
         scan = json.loads(args.scan_file.read_text(encoding="utf-8"))
     elif args.eml_dir:
@@ -1286,6 +1511,7 @@ def run(args: argparse.Namespace) -> tuple[Path, Path, Path | None]:
     scan = normalize_evidence_pack(scan, policy)
     if args.enrich_links:
         scan = enrich_scan_links(scan, policy)
+    scan = apply_topics(scan, topic_map)
     scan_path = write_scan(args.output, scan)
     report_path = write_report(args.output, scan, render_report(args, scan))
     epub_path = None if args.no_send else send_report(args, report_path, scan)
@@ -1312,6 +1538,8 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     parser.add_argument("--email-summary-prompt", type=Path, default=DEFAULT_PROMPT)
     parser.add_argument("--email-link-policy", type=Path, default=DEFAULT_LINK_POLICY)
+    parser.add_argument("--email-topic-file", type=Path, default=DEFAULT_TOPIC_FILE)
+    parser.add_argument("--summary-engine", choices=("podsum", "hermes"), default=DEFAULT_SUMMARY_ENGINE)
     parser.add_argument("--enrich-links", action="store_true")
     parser.add_argument("--project-dir", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--target", default=DEFAULT_TARGET)
@@ -1331,6 +1559,7 @@ def normalize_args(args: argparse.Namespace) -> None:
     args.env_file = args.env_file.expanduser()
     args.email_summary_prompt = args.email_summary_prompt.expanduser()
     args.email_link_policy = args.email_link_policy.expanduser()
+    args.email_topic_file = args.email_topic_file.expanduser()
     args.project_dir = args.project_dir.expanduser()
     args.hermes = args.hermes.expanduser()
     if args.scan_file:

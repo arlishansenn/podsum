@@ -105,6 +105,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertIn("--root", result.stdout)
         self.assertIn("--policy-file", result.stdout)
+        self.assertIn("--topic-file", result.stdout)
 
     def test_email_summary_prompt_matches_deep_interpretation_style(self) -> None:
         prompt = (ROOT / "outputs" / "email_summary_prompt.md").read_text(encoding="utf-8")
@@ -115,7 +116,13 @@ class PodsumCliTest(unittest.TestCase):
         self.assertIn("## 如果只记三件事", prompt)
         self.assertIn("对象: EmailIntelBrief", prompt)
         self.assertIn("版本: 0.1", prompt)
+        self.assertIn("来源对象: EmailEvidencePack", prompt)
+        self.assertIn("引导对象: EmailTopicMap", prompt)
+        self.assertIn("处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief", prompt)
         self.assertIn("不要把输出写成简单分类清单", prompt)
+        self.assertIn("topic_hits", prompt)
+        self.assertIn("items[].topics", prompt)
+        self.assertIn("## 跟踪话题", prompt)
         self.assertIn("EmailEvidencePack", prompt)
         self.assertIn("snippet` 只是邮件摘要或截断片段", prompt)
         self.assertIn("type=email_snippet", prompt)
@@ -130,6 +137,51 @@ class PodsumCliTest(unittest.TestCase):
         self.assertEqual(policy["object_type"], "email_policy")
         self.assertEqual(policy["limits"]["max_links_per_email"], 2)
         self.assertTrue(any(item["name"] == "newsletter_article" for item in policy["email_types"]))
+
+    def test_email_topic_map_parses_from_markdown(self) -> None:
+        topic_map = email_summary.load_topic_map(ROOT / "outputs" / "topic.md")
+
+        self.assertEqual(topic_map["object_type"], "email_topic_map")
+        self.assertGreaterEqual(len(topic_map["topics"]), 3)
+        self.assertTrue(any(item["id"] == "ai_industry_agent_strategy" for item in topic_map["topics"]))
+        self.assertTrue(all(item.get("description") for item in topic_map["topics"]))
+        self.assertTrue(all(item.get("examples") for item in topic_map["topics"]))
+
+    def test_email_evidence_pack_applies_topic_matches(self) -> None:
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        topic_map = {
+            "object_type": "email_topic_map",
+            "version": 1,
+            "topics": [
+                {
+                    "id": "tracked_agent",
+                    "name": "Tracked Agent Work",
+                    "priority": "high",
+                    "keywords": ["agent workflow"],
+                    "summary_focus": "Track agent workflow updates.",
+                }
+            ],
+        }
+        scan = email_summary.normalize_evidence_pack(
+            {
+                "date": "2026-07-05",
+                "items": [
+                    {
+                        "uid": "topic-1",
+                        "from": "Fixture <sender@example.invalid>",
+                        "subject": "Agent workflow update",
+                        "snippet": "A fixture note about the agent workflow.",
+                    }
+                ],
+            },
+            policy,
+        )
+
+        scan = email_summary.apply_topics(scan, topic_map)
+
+        self.assertEqual(scan["topic_map"]["object_type"], "email_topic_map")
+        self.assertEqual(scan["topic_hits"][0]["id"], "tracked_agent")
+        self.assertEqual(scan["items"][0]["topics"][0]["name"], "Tracked Agent Work")
 
     def test_email_message_item_fills_evidence_with_link_contexts(self) -> None:
         policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
@@ -193,28 +245,37 @@ class PodsumCliTest(unittest.TestCase):
                 host="127.0.0.1",
                 port=0,
                 policy_file=ROOT / "outputs" / "email_link_policy.md",
+                topic_file=ROOT / "outputs" / "topic.md",
             )
             server, thread, base_url = start_workbench(config)
             try:
                 home = get_text(base_url, "/")
                 context = get_json(base_url, "/api/context")
                 evidence = get_json(base_url, "/api/evidence-pack")
+                topics = get_json(base_url, "/api/topics")
                 commands = get_json(base_url, "/api/commands")
             finally:
                 stop_workbench(server, thread)
 
+            self.assertIn('data-view="topics"', home)
+            self.assertIn("EmailTopicMap", home)
             self.assertIn('data-view="policy"', home)
             self.assertIn("EmailEvidencePolicy", home)
             workbench_source = (ROOT / "outputs" / "podsum_email_workbench.py").read_text(encoding="utf-8")
+            self.assertIn("1. Tracked Topics", workbench_source)
+            self.assertIn("Examples", workbench_source)
+            self.assertIn("Not this", workbench_source)
             self.assertIn("1. Type Rules", workbench_source)
-            self.assertIn("1. Base Evidence", workbench_source)
-            self.assertIn("2. Link Decision", workbench_source)
+            self.assertIn("1. Topic Match", workbench_source)
+            self.assertIn("3. Link Decision", workbench_source)
             self.assertEqual(context["server"]["mode"], "manual-local-workbench")
             self.assertFalse(context["server"]["safe_defaults"]["reads_imap"])
             self.assertIn("scan", context["missing"])
             self.assertIn("summary", context["missing"])
             self.assertTrue(evidence["missing"])
+            self.assertEqual(topics["topic_map"]["object_type"], "email_topic_map")
             self.assertIn("generate_scan_manual_imap", commands["commands"])
+            self.assertIn("--email-topic-file", commands["commands"]["regenerate_summary_no_send"])
             self.assertFalse((tmp_path / "downloads" / "EmailReports").exists())
 
     def test_email_workbench_review_sidecar_preserves_artifacts(self) -> None:
@@ -257,6 +318,8 @@ class PodsumCliTest(unittest.TestCase):
                 "# Podsum Email Summary 2026-07-05\n\n"
                 "## key takeaway\n\n"
                 "仅基于邮件摘要：fixture item should be reviewed.\n\n"
+                "## 跟踪话题\n\n"
+                "本次没有命中 topic.md 中的跟踪话题。\n\n"
                 "## 来源索引\n\n"
                 "- UID=77 | From=Fixture Sender <sender@example.invalid> | "
                 "Subject=Fixture actionable mail | Date=Sun, 05 Jul 2026 08:00:00 +0800 | "
@@ -270,6 +333,7 @@ class PodsumCliTest(unittest.TestCase):
                 host="127.0.0.1",
                 port=0,
                 policy_file=ROOT / "outputs" / "email_link_policy.md",
+                topic_file=ROOT / "outputs" / "topic.md",
             )
             server, thread, base_url = start_workbench(config)
             try:
@@ -315,6 +379,7 @@ class PodsumCliTest(unittest.TestCase):
                 host="127.0.0.1",
                 port=0,
                 policy_file=policy_file,
+                topic_file=ROOT / "outputs" / "topic.md",
             )
             server, thread, base_url = start_workbench(config)
             try:
@@ -327,6 +392,31 @@ class PodsumCliTest(unittest.TestCase):
             self.assertEqual(caught.exception.code, 400)
             self.assertEqual(policy_file.read_text(encoding="utf-8"), original)
 
+    def test_email_workbench_rejects_invalid_topics_without_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            topic_file = tmp_path / "topic.md"
+            original = (ROOT / "outputs" / "topic.md").read_text(encoding="utf-8")
+            topic_file.write_text(original, encoding="utf-8")
+            config = email_workbench.WorkbenchConfig(
+                root=tmp_path / "downloads",
+                date="2026-07-05",
+                host="127.0.0.1",
+                port=0,
+                policy_file=ROOT / "outputs" / "email_link_policy.md",
+                topic_file=topic_file,
+            )
+            server, thread, base_url = start_workbench(config)
+            try:
+                with self.assertRaises(urllib.error.HTTPError) as caught:
+                    post_json(base_url, "/api/topics", {"markdown": "```json\n{\"object_type\":\n```"})
+                caught.exception.close()
+            finally:
+                stop_workbench(server, thread)
+
+            self.assertEqual(caught.exception.code, 400)
+            self.assertEqual(topic_file.read_text(encoding="utf-8"), original)
+
     def test_email_workbench_rejects_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -336,6 +426,7 @@ class PodsumCliTest(unittest.TestCase):
                 host="127.0.0.1",
                 port=0,
                 policy_file=ROOT / "outputs" / "email_link_policy.md",
+                topic_file=ROOT / "outputs" / "topic.md",
             )
             server, thread, base_url = start_workbench(config)
             try:
@@ -532,13 +623,34 @@ class PodsumCliTest(unittest.TestCase):
             policy,
         )
 
+        topic_map = {
+            "object_type": "email_topic_map",
+            "version": 1,
+            "default_behavior": "未命中 topic.md 的邮件只做低优先级补充。",
+            "topics": [
+                {
+                    "id": "decision_topic",
+                    "name": "Decision Follow-up",
+                    "priority": "high",
+                    "keywords": ["decision"],
+                    "summary_focus": "Track decisions that need follow-up.",
+                }
+            ],
+        }
+        scan = email_summary.apply_topics(scan, topic_map)
         markdown = email_summary.build_intel_brief_draft(scan, "dry-run: skipped Hermes summary")
         checklist = email_summary.review_checklist(scan, markdown)
         sources = email_workbench.parse_source_index(markdown)
 
         self.assertIn("对象: EmailIntelBrief", markdown)
         self.assertIn("版本: 0.1", markdown)
+        self.assertIn("来源对象: EmailEvidencePack 0.1", markdown)
+        self.assertIn("引导对象: EmailTopicMap v1 (1 topics)", markdown)
+        self.assertIn("处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief", markdown)
         self.assertIn("## 需要处理", markdown)
+        self.assertIn("## 跟踪话题", markdown)
+        self.assertIn("Decision Follow-up", markdown)
+        self.assertIn("topic.md 命中：Decision Follow-up", markdown)
         self.assertIn("## 值得知道", markdown)
         self.assertIn("## 来源索引", markdown)
         self.assertIn("触达上限，可能有遗漏", markdown)
@@ -912,7 +1024,59 @@ class PodsumCliTest(unittest.TestCase):
             copied_scan = tmp_path / "downloads" / "EmailReports" / "email-scan-2026-07-05.json"
             self.assertTrue(report.exists())
             self.assertTrue(copied_scan.exists())
-            self.assertIn("dry-run: skipped Hermes summary", report.read_text(encoding="utf-8"))
+            self.assertIn("dry-run: Podsum local summary engine", report.read_text(encoding="utf-8"))
+
+    def test_email_summary_default_engine_does_not_call_hermes_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            scan_file = tmp_path / "email-scan.json"
+            scan_file.write_text(
+                json.dumps(
+                    {
+                        "date": "2026-07-05",
+                        "account": "fixture@example.invalid",
+                        "window": "1d",
+                        "scan_limit": 300,
+                        "raw_count": 1,
+                        "possibly_truncated": False,
+                        "items": [
+                            {
+                                "uid": "42",
+                                "date": "Sun, 05 Jul 2026 08:00:00 +0800",
+                                "from": "Fixture Sender <sender@example.invalid>",
+                                "subject": "Fixture actionable mail",
+                                "snippet": "A fixture email that should become a local Podsum summary.",
+                                "has_attachments": False,
+                                "flags": [],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            hermes = tmp_path / "hermes"
+            hermes.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = \"-z\" ]; then echo 'Hermes prompt should not be called' >&2; exit 88; fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            hermes.chmod(0o755)
+
+            result = run_podsum(
+                "email-summary",
+                "--scan-file",
+                str(scan_file),
+                "--output",
+                str(tmp_path / "downloads"),
+                "--hermes",
+                str(hermes),
+                "--no-send",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            report = tmp_path / "downloads" / "EmailReports" / "email-summary-2026-07-05.md"
+            self.assertIn("对象: EmailIntelBrief", report.read_text(encoding="utf-8"))
 
     def test_email_summary_prompt_receives_evidence_pack_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -981,6 +1145,8 @@ class PodsumCliTest(unittest.TestCase):
                 str(tmp_path / "downloads"),
                 "--hermes",
                 str(hermes),
+                "--summary-engine",
+                "hermes",
                 "--project-dir",
                 str(tmp_path),
                 "--no-send",
@@ -988,6 +1154,8 @@ class PodsumCliTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             prompt = prompt_path.read_text(encoding="utf-8")
+            self.assertIn("email_topic_map", prompt)
+            self.assertIn("topic_hits", prompt)
             self.assertIn("EmailEvidencePack", prompt)
             self.assertIn("newsletter_article", prompt)
             self.assertIn("Public article excerpt for evidence-aware summary.", prompt)
@@ -1012,7 +1180,7 @@ class PodsumCliTest(unittest.TestCase):
             scan = json.loads(copied_scan.read_text(encoding="utf-8"))
             self.assertEqual(scan["raw_count"], 0)
             self.assertEqual(scan["items"], [])
-            self.assertIn("dry-run: skipped Hermes summary", report.read_text(encoding="utf-8"))
+            self.assertIn("dry-run: Podsum local summary engine", report.read_text(encoding="utf-8"))
 
     def test_email_summary_uses_truncated_scan_file_without_real_imap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1052,6 +1220,7 @@ class PodsumCliTest(unittest.TestCase):
             self.assertEqual(len(scan_files), 1)
             scan = json.loads(scan_files[0].read_text(encoding="utf-8"))
             self.assertEqual(scan["object_type"], "email_evidence_pack")
+            self.assertEqual(scan["topic_map"]["object_type"], "email_topic_map")
             self.assertEqual(scan["account"], "fixture@example.invalid")
             self.assertEqual(scan["raw_count"], 6)
             self.assertEqual({item["uid"] for item in scan["items"]}, {"101", "102", "103", "201", "202", "203"})
@@ -1062,6 +1231,8 @@ class PodsumCliTest(unittest.TestCase):
             self.assertTrue(any("Unknown 8bit Header" in item["subject"] for item in scan["items"]))
             self.assertTrue(any("Fixture newsletter" in item["snippet"] for item in scan["items"]))
             self.assertTrue(any(item["email_type"] == "google_alert" for item in scan["items"]))
+            self.assertTrue(all("topics" in item for item in scan["items"]))
+            self.assertIn("topic_hits", scan)
             self.assertTrue(any(item["links"] for item in scan["items"]))
             self.assertTrue(all("evidence" in item for item in scan["items"]))
             self.assertTrue(
@@ -1134,6 +1305,8 @@ class PodsumCliTest(unittest.TestCase):
                 "# Podsum Email Summary 2026-07-05\n\n"
                 "## key takeaway\n\n"
                 "仅基于邮件摘要：fixture item should be reviewed.\n\n"
+                "## 跟踪话题\n\n"
+                "本次没有命中 topic.md 中的跟踪话题。\n\n"
                 "## 来源索引\n\n"
                 "- UID=77 | From=Fixture Sender <sender@example.invalid> | Subject=Fixture actionable mail | Date=Sun, 05 Jul 2026 08:00:00 +0800 | `email://2026-07-05/77`\n"
                 "EOF\n"
@@ -1152,6 +1325,8 @@ class PodsumCliTest(unittest.TestCase):
                 str(tmp_path / "downloads"),
                 "--hermes",
                 str(hermes),
+                "--summary-engine",
+                "hermes",
                 "--project-dir",
                 str(tmp_path),
             )
@@ -1209,6 +1384,8 @@ class PodsumCliTest(unittest.TestCase):
                 str(tmp_path / "downloads"),
                 "--hermes",
                 str(hermes),
+                "--summary-engine",
+                "hermes",
                 "--project-dir",
                 str(tmp_path),
             )

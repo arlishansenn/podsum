@@ -6,19 +6,30 @@ Podsum Email Summary 的主线是：先把邮件作为 Podcast 之外的第二�
 
 总目标分三层：
 
-1. Email Summary 后台能力：扫描邮件，生成 `EmailEvidencePack`，生成 Hermes 摘要和 EPUB artifact。
-2. VIS 对象模型：固定三个核心可视化工作对象和一个质量门禁面板。
+1. Email Summary 后台能力：扫描邮件，生成 `EmailEvidencePack`，用 Podsum 本地 summary engine 生成 `EmailIntelBrief`，再生成 EPUB artifact。
+2. VIS 对象模型：固定四个核心可视化工作对象和一个质量门禁面板。
 3. 本地 GUI Workbench：Podsum 提供手动启动的 localhost Web server，用来审核已有 artifact，不读 IMAP、不调用 Hermes、不发送、不接 launchd。
 
 后续 README 和实施以本文档为准。旧的阶段性计划可以保留为历史记录。
 
 ## Object Model
 
-核心可视化工作对象有三个：
+核心可视化工作对象有四个：
 
+- `EmailTopicMap`：用户跟踪话题表，对应 `outputs/topic.md`。用户需要先看见和调整 topic，才能控制 Brief 按哪些主题展开，而不是生成宽泛 inbox digest。
 - `EmailEvidencePolicy`：邮件证据策略，对应 `outputs/email_link_policy.md`。用户需要看见和调整它，才能控制邮件分类、链接补全、跳过规则和 evidence 生成边界。`EmailPolicyPanel` 是它在 GUI 里的编辑和摘要面板，不是领域对象本身。
-- `EmailEvidencePack`：邮件证据包，对应 `EmailReports/email-scan-YYYY-MM-DD.json`。用户需要看见、筛选、标注、锁定它，才能控制下游 Brief 的生成质量。每封邮件至少包含一条 `type=email_snippet` 的邮件自身 evidence；`type=public_link` 的 evidence 只在链接补全时追加。
-- `EmailIntelBrief`：邮件情报简报，对应 `EmailReports/email-summary-YYYY-MM-DD.md`。用户需要审核、编辑、确认和批准它，才能进入 EPUB 或发送阶段。
+- `EmailEvidencePack`：邮件证据包，对应 `EmailReports/email-scan-YYYY-MM-DD.json`。用户需要看见、筛选、标注、锁定它，才能控制下游 Brief 的生成质量。每封邮件至少包含一条 `type=email_snippet` 的邮件自身 evidence；`type=public_link` 的 evidence 只在链接补全时追加；topic 命中结果写入 `items[].topics` 和 `topic_hits`。
+- `EmailIntelBrief`：邮件情报简报，对应 `EmailReports/email-summary-YYYY-MM-DD.md`。用户需要审核、编辑、确认和批准它，才能进入 EPUB 或发送阶段。它必须先按照 `EmailTopicMap` 展开，再处理 topic 之外的行动项和值得知道内容。
+
+系统边界：`EmailTopicMap` 由 Podsum 读取和应用。EmailIntelBrief 默认由
+Podsum 本地 summary engine 生成，不依赖 Hermes。若以后显式接入外部 summary
+engine，它也只能接收 Podsum 已经生成好的 `EmailEvidencePack`，其中包含
+`topic_hits` 和 `items[].topics`；不能把完整 `topic.md` JSON 作为独立 prompt
+输入交给外部系统二次解释。
+
+生成契约：`EmailTopicMap` 是 `EmailIntelBrief` 的引导对象，
+`EmailEvidencePack` 是 `EmailIntelBrief` 的来源对象。Brief artifact 必须显式记录
+`EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief` 的处理链。
 
 附属面板有一个：
 
@@ -34,7 +45,8 @@ sidecar 只保存人工标注、Brief 状态和 override，不覆盖 scan JSON �
 
 ```mermaid
 flowchart LR
-  P["EmailEvidencePolicy<br/>核心对象：邮件证据策略"] --> E["EmailEvidencePack<br/>核心对象：邮件证据包"]
+  T["EmailTopicMap<br/>核心对象：跟踪话题"] --> E["EmailEvidencePack<br/>核心对象：邮件证据包"]
+  P["EmailEvidencePolicy<br/>核心对象：邮件证据策略"] --> E
   E --> B["EmailIntelBrief<br/>核心对象：邮件情报简报"]
   B --> R["ReviewChecklistPanel<br/>附属面板：质量门禁"]
   R --> X["EPUB / Delivery<br/>人工批准后的下游动作"]
@@ -42,6 +54,11 @@ flowchart LR
 
 每个核心对象的第一版 GUI 内部区域：
 
+- `EmailTopicMap`：
+  - Tracked Topics：当前 Podsum 用户正在跟踪的话题。
+  - Priority：topic 优先级和高优先级 topic。
+  - Match Surface：匹配使用 sender、subject、snippet、links 和 evidence excerpt。
+  - Spec Editor：Markdown + fenced JSON 高级编辑区。
 - `EmailEvidencePolicy`：
   - Type Rules：邮件类型规则和匹配条件。
   - Link Strategy：哪些类型抓公开链接、每封/全局抓取上限。
@@ -53,12 +70,13 @@ flowchart LR
   - Evidence Detail：基础邮件证据、链接决策、链接证据、风险分层展示。
   - Review Marks：ignore、important、needs_link_review、type_override。
   - Fill Contract 0.1：从邮件填入 metadata、snippet、MIME body 形态、附件形态、links.context、email_snippet evidence；公开网页内容只进入 `type=public_link` evidence。
+  - Topic Contract 0.1：读取 `EmailTopicMap` 后填入 `items[].topics` 和顶层 `topic_hits`，供 Brief 和 Workbench 审核。
 - `EmailIntelBrief`：
   - Brief Sections：摘要 Markdown 渲染和人工 override。
   - Source Index：UID/from/subject/date 的来源索引与跳转。
   - Review Checklist：质量门禁结果。
   - Export / Approval：approved 后才显示 EPUB/Delivery 的人工下一步命令。
-  - Fill Contract 0.1：从 EvidencePack 生成可审核 draft；保留 key takeaway、需要处理、值得知道、可以忽略、三件事、来源索引、证据边界和 source coverage。
+  - Fill Contract 0.1：从 EvidencePack 生成可审核 draft；先按 `EmailTopicMap` 写 `跟踪话题`，再写 topic 之外的需要处理、值得知道、可以忽略、三件事、来源索引、证据边界和 source coverage。
 
 ## Phases
 
@@ -72,11 +90,13 @@ flowchart LR
 - `--eml-dir`
 - `--enrich-links`
 - `--email-link-policy`
+- `--email-topic-file`
+- `--summary-engine podsum` 默认使用 Podsum 本地摘要引擎
 - 真实 IMAP 必须显式 `--allow-imap-read`
 - 默认不抓网页，不发送，不修改邮箱状态，不接 launchd
 
-文档措辞统一为：`EmailEvidencePolicy` 是核心可视化工作对象，`EmailPolicy`
-是它编辑和保存的声明式 Spec/config，`EmailPolicyPanel` 是 GUI 面板。
+文档措辞统一为：`EmailTopicMap` 和 `EmailEvidencePolicy` 都是核心可视化工作对象；`EmailPolicy`
+是 EvidencePolicy 编辑和保存的声明式 Spec/config，`EmailPolicyPanel` 是 GUI 面板。
 
 ### Phase 2：定义 VIS GUI 规格
 
@@ -105,7 +125,7 @@ plans/podsum-email-workbench-gui-spec.md
 - 使用 Python stdlib `ThreadingHTTPServer`。
 - 第一版不引入 npm、React、Vite。
 - 只监听 `127.0.0.1`。
-- 只读取 `--root/EmailReports` 和指定 policy 文件。
+- 只读取 `--root/EmailReports`、指定 policy 文件和指定 topic 文件。
 - 不提供 IMAP、Hermes、send、launchd API。
 - 前端为单页 HTML/CSS/JS。
 
@@ -113,12 +133,12 @@ plans/podsum-email-workbench-gui-spec.md
 
 Workbench 采用单页审核台：
 
-- 左侧对象导航：`EmailEvidencePolicy`、`EmailEvidencePack`、`EmailIntelBrief`。
+- 左侧对象导航：`EmailTopicMap`、`EmailEvidencePolicy`、`EmailEvidencePack`、`EmailIntelBrief`。
 - 中间主工作区：当前核心对象。
 - 右侧附属面板：`ReviewChecklistPanel`、命令预览。
 - 底部或顶部状态区：日期、账号、artifact 缺失状态、server mode。
 
-用户操作只更新 review sidecar 或 policy 文件。重新扫描、链接补全、Hermes 摘要、发送，都只给出可复制 CLI 命令，不自动执行。
+用户操作只更新 review sidecar、policy 文件或 topic 文件。重新扫描、链接补全、摘要重跑、发送，都只给出可复制 CLI 命令，不自动执行。
 
 ### Phase 5：验证与手动使用
 

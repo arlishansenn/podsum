@@ -2,7 +2,7 @@
 
 ## Summary
 
-Email Workbench 是 Podsum 的本地手动审核台。它读取已有 Email Summary artifact，把三个核心可视化工作对象呈现给用户，并通过质量门禁面板控制导出。
+Email Workbench 是 Podsum 的本地手动审核台。它读取已有 Email Summary artifact，把四个核心可视化工作对象呈现给用户，并通过质量门禁面板控制导出。
 
 它不是新的后台 runner，不自动读 IMAP，不自动调用 Hermes，不自动发送。
 
@@ -34,14 +34,15 @@ ssh -L 8765:127.0.0.1:8765 macmini
 
 ```mermaid
 flowchart LR
-  P["EmailEvidencePolicy<br/>核心对象：邮件证据策略"] --> E["EmailEvidencePack<br/>核心对象"]
+  T["EmailTopicMap<br/>核心对象：跟踪话题"] --> E["EmailEvidencePack<br/>核心对象"]
+  P["EmailEvidencePolicy<br/>核心对象：邮件证据策略"] --> E
   E --> B["EmailIntelBrief<br/>核心对象"]
   B --> R["ReviewChecklistPanel<br/>质量门禁面板"]
   R --> X["EPUB / Delivery<br/>人工批准后的动作"]
 ```
 
-`EmailEvidencePolicy` 进入核心对象导航；`EmailPolicyPanel` 是它的 GUI
-编辑面板。`ReviewChecklistPanel` 是附属门禁面板。
+`EmailTopicMap` 和 `EmailEvidencePolicy` 都进入核心对象导航；`EmailPolicyPanel`
+是 EvidencePolicy 的 GUI 编辑面板。`ReviewChecklistPanel` 是附属门禁面板。
 
 ## Layout
 
@@ -50,6 +51,7 @@ flowchart LR
 | Date / account / artifact status / local server mode               |
 +----------------------+---------------------------------------------+
 | Core object nav      | Main work area                              |
+| - TopicMap           | - EmailTopicMap view                        |
 | - EvidencePolicy     | - EmailPolicyPanel view                     |
 | - EvidencePack       | - EvidencePack view                         |
 | - IntelBrief         | - IntelBrief view                           |
@@ -58,7 +60,34 @@ flowchart LR
 +--------------------------------------------+----------------------+
 ```
 
-第一版用单页 HTML/CSS/JS 实现。左侧导航三个核心对象；右侧只保留 ReviewChecklistPanel 和命令预览。
+第一版用单页 HTML/CSS/JS 实现。左侧导航四个核心对象；右侧只保留 ReviewChecklistPanel 和命令预览。
+
+## EmailTopicMap View
+
+输入文件：
+
+```text
+outputs/topic.md
+```
+
+展示内容：
+
+- Tracked Topics：topic id、name、priority 和 summary focus。
+- Priority：高优先级 topic 的数量和名称。
+- Match Surface：关键词数量；匹配面包括 sender、subject、snippet、links 和 evidence excerpt。
+- Default Behavior：未命中 topic 的邮件如何降级处理。
+- Spec Editor：编辑 Markdown + fenced JSON；保存前必须校验 JSON。
+
+用户操作：
+
+- 编辑 Podsum 用户正在跟踪的话题、关键词和 summary focus。
+- 保存 topic。保存失败时不覆盖原文件。
+- 查看“修改 topic 不会自动重跑”的提示和后续 CLI 命令。
+
+它控制 EvidencePack 的 `items[].topics` 和顶层 `topic_hits`，并控制 EmailIntelBrief
+先按哪些主题展开。它不直接改写已有 scan JSON 或 summary Markdown。EmailIntelBrief
+默认由 Podsum 本地 summary engine 生成；外部 summary engine 不接收完整 topic
+JSON 作为独立输入。
 
 ## EmailEvidencePolicy View
 
@@ -105,6 +134,7 @@ EmailReports/email-scan-YYYY-MM-DD.json
 - 分布：email_type、risks、attachments、links/evidence。
 - 邮件列表：UID、From、Subject、Date、email_type、risk badges。
 - 邮件详情：Base Evidence、Link Decision、Link Context、Link Evidence、Risks。
+- topic 命中：来自 `EmailTopicMap` 的 topic badges、matched keywords 和 summary focus。
 - evidence 至少包含 `type=email_snippet` 的邮件自身证据；`type=public_link`
   是链接补全后的增强证据。
 - EvidencePack 0.1 只保存 MIME body 形态、附件形态、snippet 和链接上下文；
@@ -155,10 +185,11 @@ EmailReports/email-summary-YYYY-MM-DD.md
 
 EvidencePack 到 EmailIntelBrief 的 0.1 生成规则：
 
-- dry-run 或 Hermes 失败时仍生成可审核 draft，而不是只写失败信息。
-- draft 必须包含 key takeaway、需要处理、值得知道、可以忽略、如果只记三件事和来源索引。
+- dry-run 和默认本地 summary engine 都生成可审核 draft，而不是只写失败信息。
+- draft 必须包含 key takeaway、跟踪话题、需要处理、值得知道、可以忽略、如果只记三件事和来源索引。
+- draft 必须先按 `EmailTopicMap` 展开 topic 命中邮件；没有命中 topic 但仍需处理的邮件再进入后续分类。
 - snippet-only、link skipped、truncated window 等证据边界必须进入 brief。
-- Workbench 计算 source coverage；缺 UID 来源会使 checklist 或审核状态不可批准。
+- Workbench 计算 source coverage；缺 UID 来源或缺 topic 展开会使 checklist 或审核状态不可批准。
 
 ## ReviewChecklistPanel
 
@@ -171,6 +202,7 @@ EvidencePack 到 EmailIntelBrief 的 0.1 生成规则：
 检查项：
 
 - has_key_takeaway
+- has_topic_expansion
 - has_source_index
 - has_uid_trace
 - has_truncated_warning
@@ -183,6 +215,8 @@ EvidencePack 到 EmailIntelBrief 的 0.1 生成规则：
 ## APIs
 
 - `GET /api/context`：date、root、artifact paths、exists、mtime、server mode。
+- `GET /api/topics`：topic Markdown 和解析后的 JSON。
+- `POST /api/topics`：保存 topic Markdown；无效 JSON 时拒绝。
 - `GET /api/evidence-pack`：normalized scan JSON，合并 review 标注。
 - `GET /api/intel-brief`：summary Markdown、brief override、source index。
 - `GET /api/policy`：policy Markdown 和解析后的 JSON。
@@ -195,6 +229,7 @@ EvidencePack 到 EmailIntelBrief 的 0.1 生成规则：
 
 - scan 缺失：显示 missing 状态和生成 scan 的 CLI 命令。
 - summary 缺失：显示 missing 状态和基于 scan 生成 summary 的 CLI 命令。
+- topic 解析失败：显示错误，不影响 EvidencePack 浏览，保存时拒绝覆盖。
 - policy 解析失败：显示错误，不影响 EvidencePack 浏览，保存时拒绝覆盖。
 - checklist 失败：显示失败项，禁止显示发送批准状态。
 - path 越界：返回 404 或 403，不读取任意文件。
