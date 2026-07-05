@@ -39,7 +39,7 @@ def text_payloads(message: Message) -> list[tuple[str, str]]:
         payload = part.get_payload(decode=True)
         if not payload:
             continue
-        values.append((content_type, payload.decode(part.get_content_charset() or "utf-8", errors="replace")))
+        values.append((content_type, email_summary.decode_bytes(payload, part.get_content_charset())))
     return values
 
 

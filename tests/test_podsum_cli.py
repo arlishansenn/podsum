@@ -447,6 +447,41 @@ class PodsumCliTest(unittest.TestCase):
             self.assertTrue(any(item["has_attachments"] for item in scan["items"]))
             self.assertTrue(any("Google快讯" in item["subject"] for item in scan["items"]))
 
+    def test_email_summary_tolerates_unknown_8bit_charset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            eml_dir = tmp_path / "eml"
+            eml_dir.mkdir()
+            (eml_dir / "unknown-8bit.eml").write_bytes(
+                b"X-Podsum-Fixture-UID: 201\n"
+                b"From: =?unknown-8bit?Q?Fixture_Sender?= <sender@example.invalid>\n"
+                b"To: Fixture Recipient <recipient@example.invalid>\n"
+                b"Subject: =?unknown-8bit?Q?Fixture_Unknown_Encoding?=\n"
+                b"Date: Sun, 05 Jul 2026 08:04:00 +0800\n"
+                b"Message-ID: <fixture-unknown-8bit@example.invalid>\n"
+                b"MIME-Version: 1.0\n"
+                b"Content-Type: text/plain; charset=\"unknown-8bit\"\n"
+                b"Content-Transfer-Encoding: 8bit\n"
+                b"\n"
+                b"Fixture body with unknown charset marker.\n"
+            )
+
+            result = run_podsum(
+                "email-summary",
+                "--eml-dir",
+                str(eml_dir),
+                "--output",
+                str(tmp_path / "downloads"),
+                "--dry-run",
+                "--no-send",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            scan_files = list((tmp_path / "downloads" / "EmailReports").glob("email-scan-*.json"))
+            scan = json.loads(scan_files[0].read_text(encoding="utf-8"))
+            self.assertEqual(scan["items"][0]["subject"], "Fixture Unknown Encoding")
+            self.assertIn("Fixture body", scan["items"][0]["snippet"])
+
     def test_email_summary_sends_email_specific_epub_with_fake_hermes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

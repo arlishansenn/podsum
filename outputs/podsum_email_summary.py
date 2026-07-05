@@ -97,6 +97,21 @@ def clean_text(value: str, limit: int = SNIPPET_CHARS) -> str:
     return value[:limit].rstrip() + "..."
 
 
+def decode_bytes(value: bytes, charset: str | None = None) -> str:
+    encodings = [charset or "", "utf-8", "gb18030", "gbk", "latin-1"]
+    seen: set[str] = set()
+    for encoding in encodings:
+        encoding = encoding.strip().lower()
+        if not encoding or encoding in seen or encoding == "unknown-8bit":
+            continue
+        seen.add(encoding)
+        try:
+            return value.decode(encoding, errors="replace")
+        except LookupError:
+            continue
+    return value.decode("utf-8", errors="replace")
+
+
 def decode_header_value(value: str | None) -> str:
     if not value:
         return ""
@@ -107,7 +122,7 @@ def decode_header_value(value: str | None) -> str:
     decoded: list[str] = []
     for part, charset in parts:
         if isinstance(part, bytes):
-            decoded.append(part.decode(charset or "utf-8", errors="replace"))
+            decoded.append(decode_bytes(part, charset))
         else:
             decoded.append(part)
     return "".join(decoded)
@@ -126,14 +141,14 @@ def body_snippet(message: Message) -> str:
             payload = part.get_payload(decode=True)
             if not payload:
                 continue
-            text = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+            text = decode_bytes(payload, part.get_content_charset())
             if content_type == "text/html":
                 text = re.sub(r"<[^>]+>", " ", text)
             candidates.append(text)
     else:
         payload = message.get_payload(decode=True)
         if payload:
-            candidates.append(payload.decode(message.get_content_charset() or "utf-8", errors="replace"))
+            candidates.append(decode_bytes(payload, message.get_content_charset()))
     return clean_text(" ".join(candidates))
 
 
