@@ -253,6 +253,59 @@ def needs_payload(config: WorkbenchConfig) -> dict[str, Any]:
     }
 
 
+def harness_session(config: WorkbenchConfig, object_type: str, scenario: str) -> object_harness.ObjectHarnessSession:
+    object_harness.validate_scenario(scenario)
+    return current_harness_session(config, object_type)
+
+
+def current_harness_session(config: WorkbenchConfig, object_type: str) -> object_harness.ObjectHarnessSession:
+    validated_object_type = object_harness.validate_object_type(object_type)
+    current_object, risks, missing_fields = current_harness_object(config, validated_object_type)
+    return object_harness.new_session_from_object(validated_object_type, current_object, risks, missing_fields)
+
+
+def current_harness_object(config: WorkbenchConfig, object_type: object_harness.ObjectType) -> tuple[dict[str, Any], tuple[str, ...], tuple[str, ...]]:
+    if object_type == "email_topic_map":
+        payload = topic_payload(config)
+        current_object = current_nested_object(payload, "topic_map", "email_topic_map")
+    elif object_type == "email_evidence_policy":
+        payload = policy_payload(config)
+        current_object = current_nested_object(payload, "policy", "email_policy")
+    elif object_type == "email_evidence_pack":
+        payload = load_evidence_pack(config)
+        current_object = current_nested_object(payload, "scan", "email_evidence_pack")
+    elif object_type == "email_intel_brief":
+        payload = intel_brief_payload(config)
+        current_object = json.loads(json.dumps(payload))
+    else:
+        payload = needs_payload(config)
+        current_object = json.loads(json.dumps(payload["store"]))
+    risks = current_artifact_risks(payload)
+    missing_fields = object_harness.missing_fields_for(object_type, current_object)
+    return current_object, tuple(risks), missing_fields
+
+
+def current_nested_object(payload: dict[str, Any], field_name: str, fallback_object_type: str) -> dict[str, Any]:
+    value = payload.get(field_name)
+    if isinstance(value, dict):
+        return json.loads(json.dumps(value))
+    return {
+        "object_type": fallback_object_type,
+        "missing": bool(payload.get("missing")),
+        "path": str(payload.get("path") or ""),
+        "error": str(payload.get("error") or ""),
+    }
+
+
+def current_artifact_risks(payload: dict[str, Any]) -> list[str]:
+    risks = ["current_workbench_artifact"]
+    if payload.get("missing"):
+        risks.append("missing_current_artifact")
+    if payload.get("error"):
+        risks.append("current_artifact_error")
+    return risks
+
+
 def update_need_action(config: WorkbenchConfig, need_id: str, body: dict[str, Any]) -> dict[str, Any]:
     action = str(body.get("action") or "")
     event_type = NEED_ACTION_EVENTS.get(action)
@@ -647,9 +700,10 @@ def make_handler(config: WorkbenchConfig) -> type[BaseHTTPRequestHandler]:
                     json_response(self, 200, {"ok": True, "catalog": object_harness.list_catalog()})
                 elif path == "/api/harness/session":
                     query = urllib.parse.parse_qs(parsed.query)
-                    session = object_harness.new_session(
+                    session = harness_session(
+                        config,
                         str(query.get("object_type", ["email_evidence_pack"])[0]),
-                        str(query.get("scenario", ["normal"])[0]),
+                        str(query.get("scenario", [object_harness.CURRENT_SCENARIO])[0]),
                     )
                     json_response(self, 200, {"ok": True, "session": session.to_dict()})
                 else:
@@ -680,7 +734,7 @@ def make_handler(config: WorkbenchConfig) -> type[BaseHTTPRequestHandler]:
                     need_id = urllib.parse.unquote(path.removeprefix("/api/needs/").removesuffix("/action").strip("/"))
                     json_response(self, 200, {"ok": True, **update_need_action(config, need_id, body)})
                 elif path == "/api/harness/session":
-                    session = object_harness.new_session(str(body.get("object_type") or ""), str(body.get("scenario") or ""))
+                    session = harness_session(config, str(body.get("object_type") or ""), str(body.get("scenario") or object_harness.CURRENT_SCENARIO))
                     json_response(self, 200, {"ok": True, "session": session.to_dict()})
                 elif path == "/api/harness/event":
                     session = object_harness.session_from_dict(body.get("session") if isinstance(body.get("session"), dict) else {})
@@ -696,7 +750,7 @@ def make_handler(config: WorkbenchConfig) -> type[BaseHTTPRequestHandler]:
                     fixture = body.get("fixture") if isinstance(body.get("fixture"), dict) else {}
                     session = object_harness.import_session_fixture(
                         str(body.get("object_type") or ""),
-                        str(body.get("scenario") or "normal"),
+                        str(body.get("scenario") or object_harness.CURRENT_SCENARIO),
                         fixture,
                     )
                     json_response(self, 200, {"ok": True, "session": session.to_dict()})
@@ -761,7 +815,7 @@ HARNESS_HTML = """<!doctype html>
     <div>
       <p class="eyebrow">VIS Object Test Harness</p>
       <h1>Podsum Email Object Harness</h1>
-      <p>Fixture-only object tests. No IMAP, no link fetching, no Hermes, no sending, no launchd changes.</p>
+      <p>Load the current Workbench artifacts into a local feel-testing harness. No IMAP, no link fetching, no Hermes, no sending, no launchd changes.</p>
     </div>
     <div class="toolbar">
       <a class="command" href="/">Formal Workbench</a>
@@ -771,8 +825,8 @@ HARNESS_HTML = """<!doctype html>
     <section class="panel">
       <h2>Object selector</h2>
       <label>Object type <select id="harnessObjectType" data-testid="harness-object-type"></select></label>
-      <label>Scenario <select id="harnessScenario" data-testid="harness-scenario"></select></label>
-      <button id="harnessLoad" data-testid="harness-load">Load fixture</button>
+      <p class="notice">Source: current formal Workbench artifact for the selected object.</p>
+      <button id="harnessLoad" data-testid="harness-load">Load current artifact</button>
       <button id="harnessClear" data-testid="harness-clear">Clear data</button>
       <button id="harnessValidate" data-testid="harness-validate">Validate object</button>
       <button id="harnessMockSkill" data-testid="harness-mock-skill">Mock Skill</button>
@@ -799,7 +853,7 @@ HARNESS_HTML = """<!doctype html>
     function renderHarness() {
       document.getElementById('harnessSummary').innerHTML = [
         `<div class="stat"><strong>Object</strong><span>${harnessSession.selected_object_type}</span></div>`,
-        `<div class="stat"><strong>Fixture</strong><span>${harnessSession.selected_fixture}</span></div>`,
+        `<div class="stat"><strong>Source</strong><span>${harnessSession.fixture_source}</span></div>`,
         `<div class="stat"><strong>State</strong><span>${harnessSession.lifecycle_status}</span></div>`,
         `<div class="stat"><strong>Events</strong><span>${harnessSession.event_log.length}</span></div>`
       ].join('');
@@ -813,8 +867,7 @@ HARNESS_HTML = """<!doctype html>
     }
     async function loadHarnessSession() {
       const objectType = document.getElementById('harnessObjectType').value;
-      const scenario = document.getElementById('harnessScenario').value;
-      const data = await harnessApi(`/api/harness/session?object_type=${encodeURIComponent(objectType)}&scenario=${encodeURIComponent(scenario)}`);
+      const data = await harnessApi(`/api/harness/session?object_type=${encodeURIComponent(objectType)}&scenario=current`);
       harnessSession = data.session;
       renderHarness();
     }
@@ -831,7 +884,6 @@ HARNESS_HTML = """<!doctype html>
       const data = await harnessApi('/api/harness/catalog');
       harnessCatalog = data.catalog;
       document.getElementById('harnessObjectType').innerHTML = harnessCatalog.object_types.map((item) => `<option value="${item}">${item}</option>`).join('');
-      document.getElementById('harnessScenario').innerHTML = harnessCatalog.scenarios.map((item) => `<option value="${item}">${item}</option>`).join('');
       document.getElementById('harnessLoad').addEventListener('click', loadHarnessSession);
       document.getElementById('harnessClear').addEventListener('click', () => sendHarnessEvent('clear_data', {}));
       document.getElementById('harnessValidate').addEventListener('click', () => sendHarnessEvent('validate_object', {}));

@@ -14,7 +14,7 @@ ObjectType = Literal[
     "email_intel_brief",
     "evidence_need_queue",
 ]
-Scenario = Literal["normal", "missing", "conflict", "overlong", "low_quality"]
+Scenario = Literal["current"]
 LifecycleStatus = Literal["draft", "edited", "validated", "locked", "exported"]
 
 OBJECT_TYPES: tuple[ObjectType, ...] = (
@@ -24,33 +24,13 @@ OBJECT_TYPES: tuple[ObjectType, ...] = (
     "email_intel_brief",
     "evidence_need_queue",
 )
-SCENARIOS: tuple[Scenario, ...] = ("normal", "missing", "conflict", "overlong", "low_quality")
+CURRENT_SCENARIO: Scenario = "current"
+SCENARIOS: tuple[Scenario, ...] = (CURRENT_SCENARIO,)
 LIFECYCLE_STATUSES: tuple[LifecycleStatus, ...] = ("draft", "edited", "validated", "locked", "exported")
 HARNESS_OBJECT_TYPE = "email_object_harness_session"
 HARNESS_OBJECT_VERSION = 1
 EVENT_OBJECT_TYPE = "email_object_harness_event"
 RENDERER_CONTRACT = "email-workbench-object-renderer-v1"
-
-
-@dataclass(frozen=True)
-class ObjectFixture:
-    object_type: ObjectType
-    scenario: Scenario
-    name: str
-    object_data: dict[str, Any]
-    risks: tuple[str, ...]
-    missing_fields: tuple[str, ...]
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "object_type": self.object_type,
-            "scenario": self.scenario,
-            "name": self.name,
-            "object": deep_copy(self.object_data),
-            "risks": list(self.risks),
-            "missing_fields": list(self.missing_fields),
-            "privacy_safe": True,
-        }
 
 
 @dataclass(frozen=True)
@@ -99,6 +79,8 @@ class ObjectHarnessSession:
             "version_history": [deep_copy(version) for version in self.version_history],
             "risks": list(self.risks),
             "missing_fields": list(self.missing_fields),
+            "fixture_source": "workbench_artifact",
+            "privacy_safe": False,
             "renderer": renderer_payload(self.object_type, self.current_object),
         }
 
@@ -106,11 +88,18 @@ class ObjectHarnessSession:
 def list_catalog() -> dict[str, Any]:
     groups: dict[str, Any] = {}
     for object_type in OBJECT_TYPES:
-        fixtures = [fixture_for(object_type, scenario).to_dict() for scenario in SCENARIOS]
         groups[object_type] = {
             "object_type": object_type,
-            "scenarios": [fixture["scenario"] for fixture in fixtures],
-            "fixtures": fixtures,
+            "scenarios": list(SCENARIOS),
+            "fixtures": [],
+            "current_source": {
+                "object_type": object_type,
+                "scenario": CURRENT_SCENARIO,
+                "name": f"{object_type}:current",
+                "fixture_source": "workbench_artifact",
+                "privacy_safe": False,
+                "description": "Loads the current formal Workbench artifact payload for this object.",
+            },
         }
     return {
         "object_type": "email_object_fixture_catalog",
@@ -129,21 +118,24 @@ def list_catalog() -> dict[str, Any]:
     }
 
 
-def new_session(object_type: str, scenario: str) -> ObjectHarnessSession:
+def new_session_from_object(
+    object_type: str,
+    object_data: dict[str, Any],
+    risks: tuple[str, ...],
+    missing_fields: tuple[str, ...],
+) -> ObjectHarnessSession:
     validated_object_type = validate_object_type(object_type)
-    validated_scenario = validate_scenario(scenario)
-    fixture = fixture_for(validated_object_type, validated_scenario)
-    current = deep_copy(fixture.object_data)
+    current = deep_copy(object_data)
     version = object_version(current)
     return ObjectHarnessSession(
         object_type=validated_object_type,
-        scenario=validated_scenario,
+        scenario=CURRENT_SCENARIO,
         lifecycle_status="draft",
         current_object=current,
         event_log=(),
-        version_history=(version_record("load_fixture", version, current),),
-        risks=fixture.risks,
-        missing_fields=fixture.missing_fields,
+        version_history=(version_record("load_current_workbench_artifact", version, current),),
+        risks=risks,
+        missing_fields=missing_fields,
     )
 
 
@@ -173,8 +165,8 @@ def session_from_dict(value: dict[str, Any]) -> ObjectHarnessSession:
 
 
 def apply_event(session: ObjectHarnessSession, event_type: str, payload: dict[str, Any], actor: str) -> ObjectHarnessSession:
-    if session.lifecycle_status == "locked" and event_type not in {"switch_state", "reset", "export_object"}:
-        raise ValueError("locked harness object only allows switch_state, reset, or export_object")
+    if session.lifecycle_status == "locked" and event_type not in {"switch_state", "reset_history", "export_object"}:
+        raise ValueError("locked harness object only allows switch_state, reset_history, or export_object")
     before = object_version(session.current_object)
     next_object = deep_copy(session.current_object)
     next_status = session.lifecycle_status
@@ -186,12 +178,6 @@ def apply_event(session: ObjectHarnessSession, event_type: str, payload: dict[st
         next_status = "edited"
         next_risks = ("cleared_data",)
         next_missing = missing_fields_for(session.object_type, next_object)
-    elif event_type == "fill_sample_data":
-        fixture = fixture_for(session.object_type, "normal")
-        next_object = deep_copy(fixture.object_data)
-        next_status = "edited"
-        next_risks = fixture.risks
-        next_missing = fixture.missing_fields
     elif event_type == "switch_state":
         next_status = validate_lifecycle_status(str(payload.get("status") or ""))
     elif event_type == "save_version":
@@ -250,18 +236,18 @@ def apply_event(session: ObjectHarnessSession, event_type: str, payload: dict[st
 
 def import_session_fixture(object_type: str, scenario: str, object_data: dict[str, Any]) -> ObjectHarnessSession:
     validated_object_type = validate_object_type(object_type)
-    validated_scenario = validate_scenario(scenario)
+    validate_scenario(scenario)
     validate_imported_object(validated_object_type, object_data)
     missing = missing_fields_for(validated_object_type, object_data)
-    risks = ("imported_fixture",) if not missing else ("imported_fixture", "missing_fields")
+    risks = ("imported_workbench_artifact",) if not missing else ("imported_workbench_artifact", "missing_fields")
     version = object_version(object_data)
     return ObjectHarnessSession(
         object_type=validated_object_type,
-        scenario=validated_scenario,
+        scenario=CURRENT_SCENARIO,
         lifecycle_status="draft",
         current_object=deep_copy(object_data),
         event_log=(),
-        version_history=(version_record("import_fixture", version, object_data),),
+        version_history=(version_record("import_workbench_artifact", version, object_data),),
         risks=risks,
         missing_fields=missing,
     )
@@ -269,13 +255,13 @@ def import_session_fixture(object_type: str, scenario: str, object_data: dict[st
 
 def export_session_fixture(session: ObjectHarnessSession) -> dict[str, Any]:
     return {
-        "object_type": "email_object_harness_fixture_export",
+        "object_type": "email_object_harness_artifact_export",
         "object_version": 1,
         "selected_object_type": session.object_type,
         "scenario": session.scenario,
         "fixture": deep_copy(session.current_object),
         "version": object_version(session.current_object),
-        "privacy_safe": True,
+        "privacy_safe": False,
     }
 
 
@@ -287,223 +273,16 @@ def renderer_payload(object_type: str, object_data: dict[str, Any]) -> dict[str,
     }
 
 
-def fixture_for(object_type: ObjectType, scenario: Scenario) -> ObjectFixture:
-    data = base_fixture(object_type)
-    risks: tuple[str, ...] = ()
-    missing: tuple[str, ...] = ()
-    if scenario == "missing":
-        data = missing_fixture(object_type, data)
-        risks = ("missing_fields",)
-        missing = missing_fields_for(object_type, data)
-    elif scenario == "conflict":
-        data = conflict_fixture(object_type, data)
-        risks = ("conflict",)
-    elif scenario == "overlong":
-        data = overlong_fixture(object_type, data)
-        risks = ("overlong",)
-    elif scenario == "low_quality":
-        data = low_quality_fixture(object_type, data)
-        risks = ("low_quality",)
-    return ObjectFixture(object_type, scenario, f"{object_type}:{scenario}", data, risks, missing)
-
-
-def base_fixture(object_type: ObjectType) -> dict[str, Any]:
-    if object_type == "email_topic_map":
-        return {
-            "object_type": "email_topic_map",
-            "version": 1,
-            "topics": [
-                {
-                    "id": "decision",
-                    "name": "Strategic Decisions",
-                    "priority": "high",
-                    "description": "Synthetic decisions that need evidence.",
-                    "keywords": ["decision", "roadmap"],
-                    "aliases": ["plan"],
-                    "summary_focus": "Explain decisions and risks.",
-                    "default_behavior": "include_when_actionable",
-                }
-            ],
-        }
-    if object_type == "email_evidence_policy":
-        return {
-            "object_type": "email_evidence_policy",
-            "version": 1,
-            "link_budget": {"per_email": 3, "global": 10},
-            "skip_domains": ["tracking.example.invalid"],
-            "fetch": {"enabled": False, "timeout_seconds": 5},
-            "classification": {"mode": "deterministic", "confidence_threshold": 0.7},
-        }
-    if object_type == "email_evidence_pack":
-        return {
-            "object_type": "email_evidence_pack",
-            "status": "ready_for_summary",
-            "date": "2026-07-05",
-            "account": "fixture@example.invalid",
-            "window": "1d",
-            "scan_limit": 10,
-            "raw_count": 1,
-            "possibly_truncated": False,
-            "topic_hits": {"decision": 1},
-            "items": [base_email_item("77")],
-        }
-    if object_type == "email_intel_brief":
-        return {
-            "object_type": "email_intel_brief",
-            "object_version": 1,
-            "missing": False,
-            "path": "/tmp/podsum-fixture/email-summary-2026-07-05.md",
-            "markdown": "## key takeaway\nA synthetic decision has source coverage.\n\n## 来源索引\n- UID=77 | From=Fixture | Subject=Decision | Date=2026-07-05 | email://2026-07-05/77\n",
-            "effective_markdown": "## key takeaway\nA synthetic decision has source coverage.\n\n## 来源索引\n- UID=77 | From=Fixture | Subject=Decision | Date=2026-07-05 | email://2026-07-05/77\n",
-            "source": "fixture",
-            "source_index": [{"uid": "77", "source_uid": "77", "subject": "Decision"}],
-            "sections": [{"title": "key takeaway", "chars": 41, "lines": 1}],
-            "source_coverage": {"source_count": 1, "item_count": 1, "covered_count": 1, "missing_uids": [], "complete": True},
-            "review": {"brief_status": "draft", "brief_override_markdown": ""},
-        }
-    return {
-        "object_type": "evidence_need_store",
-        "object_version": 1,
-        "needs": [base_need("need-high", "open")],
-    }
-
-
-def base_email_item(uid: str) -> dict[str, Any]:
-    return {
-        "uid": uid,
-        "date": "Sun, 05 Jul 2026 08:00:00 +0800",
-        "from": "Fixture Sender <sender@example.invalid>",
-        "subject": "Decision source found",
-        "snippet": "Synthetic privacy-safe email snippet about a roadmap decision.",
-        "has_attachments": False,
-        "links": [
-            {
-                "url": "https://example.invalid/source",
-                "anchor": "source",
-                "decision": "fetch",
-                "decision_source": "deterministic_rule",
-                "decision_reason": "content candidate",
-            }
-        ],
-        "evidence": [
-            {
-                "type": "public_link",
-                "uid": uid,
-                "url": "https://example.invalid/source",
-                "status": "fetched",
-                "title": "Synthetic source",
-                "excerpt": "Synthetic verified source text.",
-                "source_ref": f"email:{uid}:link:0",
-            }
-        ],
-        "topics": [{"topic_id": "decision", "priority": "high", "matched_terms": ["decision"]}],
-        "risks": [],
-        "flags": [],
-        "_review": {},
-    }
-
-
-def base_need(need_id: str, status: str) -> dict[str, Any]:
-    return {
-        "need_id": need_id,
-        "status": status,
-        "urgency": "high",
-        "topic_id": "decision",
-        "source_brief_id": "brief-2026-07-05",
-        "claim_or_question": "Does the synthetic decision have enough evidence?",
-        "why_needed": "The fixture models a traceability boundary.",
-        "known_source_refs": ["email:77"],
-        "needed_evidence": ["public_link_or_full_body"],
-        "created_at": "2026-07-05T08:00:00Z",
-        "last_checked_at": "2026-07-05T08:00:00Z",
-        "resolved_by": [],
-        "response_policy": "emit_need_reference_only",
-        "audit_trail": [],
-    }
-
-
-def missing_fixture(object_type: ObjectType, data: dict[str, Any]) -> dict[str, Any]:
-    value = deep_copy(data)
-    if object_type == "email_topic_map":
-        value["topics"][0]["summary_focus"] = ""
-    elif object_type == "email_evidence_policy":
-        value["link_budget"] = {"per_email": 0, "global": 0}
-    elif object_type == "email_evidence_pack":
-        value["items"][0]["evidence"] = []
-        value["items"][0]["risks"] = ["snippet_only"]
-    elif object_type == "email_intel_brief":
-        value["source_index"] = []
-        value["source_coverage"] = {"source_count": 0, "item_count": 1, "covered_count": 0, "missing_uids": ["77"], "complete": False}
-    else:
-        value["needs"] = []
-    return value
-
-
-def conflict_fixture(object_type: ObjectType, data: dict[str, Any]) -> dict[str, Any]:
-    value = deep_copy(data)
-    if object_type == "email_topic_map":
-        topic = deep_copy(value["topics"][0])
-        topic["id"] = "decision-duplicate"
-        topic["name"] = "Duplicate Decisions"
-        topic["keywords"] = ["decision", "roadmap"]
-        value["topics"].append(topic)
-    elif object_type == "email_evidence_policy":
-        value["skip_domains"].append("example.invalid")
-        value["force_fetch_domains"] = ["example.invalid"]
-    elif object_type == "email_evidence_pack":
-        value["items"].append({**base_email_item("77"), "subject": "Duplicate UID conflict"})
-    elif object_type == "email_intel_brief":
-        value["source_index"].append({"uid": "77", "source_uid": "77", "subject": "Duplicate source"})
-    else:
-        value["needs"].append(base_need("need-high", "open"))
-    return value
-
-
-def overlong_fixture(object_type: ObjectType, data: dict[str, Any]) -> dict[str, Any]:
-    value = deep_copy(data)
-    if object_type == "email_topic_map":
-        value["topics"][0]["keywords"] = [f"keyword-{index}" for index in range(24)]
-    elif object_type == "email_evidence_policy":
-        value["skip_domains"] = [f"tracking-{index}.example.invalid" for index in range(20)]
-    elif object_type == "email_evidence_pack":
-        value["items"][0]["links"] = [
-            {"url": f"https://example.invalid/source-{index}", "anchor": f"source {index}", "decision": "fetch"}
-            for index in range(18)
-        ]
-    elif object_type == "email_intel_brief":
-        value["markdown"] = "## key takeaway\n" + "\n".join(f"- Synthetic point {index} with source UID=77." for index in range(30))
-        value["effective_markdown"] = value["markdown"]
-    else:
-        value["needs"] = [base_need(f"need-{index}", "open" if index % 2 == 0 else "watching") for index in range(12)]
-    return value
-
-
-def low_quality_fixture(object_type: ObjectType, data: dict[str, Any]) -> dict[str, Any]:
-    value = deep_copy(data)
-    if object_type == "email_topic_map":
-        value["topics"][0]["description"] = ""
-        value["topics"][0]["examples"] = []
-    elif object_type == "email_evidence_policy":
-        value["classification"] = {"mode": "unknown", "confidence_threshold": 0.99}
-    elif object_type == "email_evidence_pack":
-        value["items"][0]["evidence"][0]["status"] = "failed"
-        value["items"][0]["risks"] = ["link_failed", "snippet_only"]
-    elif object_type == "email_intel_brief":
-        value["source_coverage"] = {"source_count": 0, "item_count": 1, "covered_count": 0, "missing_uids": ["77"], "complete": False}
-        value["markdown"] = "## key takeaway\nMaybe important, but source coverage is weak.\n"
-        value["effective_markdown"] = value["markdown"]
-    else:
-        value["needs"] = [base_need("need-low-quality", "blocked")]
-    return value
-
-
 def clear_object_shape(object_type: ObjectType, data: dict[str, Any]) -> dict[str, Any]:
     value = deep_copy(data)
     if object_type == "email_topic_map":
         value["topics"] = []
     elif object_type == "email_evidence_policy":
-        value["link_budget"] = {"per_email": 0, "global": 0}
-        value["skip_domains"] = []
+        if "limits" in value:
+            value["limits"] = {key: 0 for key in as_dict(value.get("limits"))}
+        if "link_budget" in value:
+            value["link_budget"] = {"per_email": 0, "global": 0}
+        value["skip_url_patterns"] = []
     elif object_type == "email_evidence_pack":
         value["raw_count"] = 0
         value["topic_hits"] = {}
@@ -522,18 +301,12 @@ def clear_object_shape(object_type: ObjectType, data: dict[str, Any]) -> dict[st
 def missing_fields_for(object_type: ObjectType, data: dict[str, Any]) -> tuple[str, ...]:
     if object_type == "email_topic_map" and not data.get("topics"):
         return ("topics",)
-    if object_type == "email_topic_map":
-        topics = data.get("topics") if isinstance(data.get("topics"), list) else []
-        if topics and isinstance(topics[0], dict) and not topics[0].get("summary_focus"):
-            return ("topics[0].summary_focus",)
-    if object_type == "email_evidence_policy" and not data.get("link_budget"):
+    if object_type == "email_evidence_policy" and not (data.get("link_budget") or data.get("limits")):
         return ("link_budget",)
     if object_type == "email_evidence_pack":
         items = data.get("items") if isinstance(data.get("items"), list) else []
         if not items:
             return ("items",)
-        if isinstance(items[0], dict) and not items[0].get("evidence"):
-            return ("items[0].evidence",)
     if object_type == "email_intel_brief" and not data.get("source_index"):
         return ("source_index",)
     if object_type == "evidence_need_queue" and not data.get("needs"):
@@ -562,32 +335,34 @@ def update_first_need(data: dict[str, Any], status: str) -> dict[str, Any]:
 
 def mock_evidence_agent(data: dict[str, Any]) -> dict[str, Any]:
     value = deep_copy(data)
-    if isinstance(value.get("items"), list):
-        value["items"].append(base_email_item(f"mock-{len(value['items']) + 1}"))
-        value["raw_count"] = len(value["items"])
+    items = value.get("items") if isinstance(value.get("items"), list) else []
+    if items and isinstance(items[0], dict):
+        flags = as_list(items[0].get("flags"))
+        items[0]["flags"] = [*flags, "harness_mock_evidence_agent"] if "harness_mock_evidence_agent" not in flags else flags
+        items[0]["_review"] = {**as_dict(items[0].get("_review")), "needs_link_review": True}
     else:
-        value["mock_evidence_agent"] = {"changed": True}
+        value["harness_mock_evidence_agent"] = {"changed": False, "reason": "no current email item"}
     return value
 
 
 def mock_brief_agent(data: dict[str, Any]) -> dict[str, Any]:
     value = deep_copy(data)
     markdown = str(value.get("effective_markdown") or value.get("markdown") or "")
-    value["effective_markdown"] = markdown.rstrip() + "\n\n## Mock BriefAgent diff\n- Added deterministic harness note.\n"
+    value["effective_markdown"] = markdown.rstrip() + "\n\n## Harness BriefAgent note\n- Current artifact was edited inside the local harness only.\n"
     value["markdown"] = value["effective_markdown"]
     return value
 
 
 def validate_imported_object(object_type: ObjectType, object_data: dict[str, Any]) -> None:
     expected = {
-        "email_topic_map": "email_topic_map",
-        "email_evidence_policy": "email_evidence_policy",
-        "email_evidence_pack": "email_evidence_pack",
-        "email_intel_brief": "email_intel_brief",
-        "evidence_need_queue": "evidence_need_store",
+        "email_topic_map": ("email_topic_map",),
+        "email_evidence_policy": ("email_evidence_policy", "email_policy"),
+        "email_evidence_pack": ("email_evidence_pack",),
+        "email_intel_brief": ("email_intel_brief",),
+        "evidence_need_queue": ("evidence_need_store", "email_need_store"),
     }[object_type]
-    if object_data.get("object_type") != expected:
-        raise ValueError(f"imported fixture must have object_type={expected}")
+    if object_data.get("object_type") not in expected:
+        raise ValueError(f"imported artifact must have object_type one of {', '.join(expected)}")
 
 
 def validate_object_type(value: str) -> ObjectType:

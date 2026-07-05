@@ -127,7 +127,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertIn("/opt/podsum/.venv/bin/python", commands["regenerate_summary_no_send"])
         self.assertNotIn("/usr/bin/python3", commands["regenerate_summary_no_send"])
 
-    def test_email_object_harness_catalog_covers_core_objects_and_scenarios(self) -> None:
+    def test_email_object_harness_catalog_uses_current_workbench_artifacts_only(self) -> None:
         catalog = object_harness.list_catalog()
 
         self.assertEqual(catalog["renderer_contract"], object_harness.RENDERER_CONTRACT)
@@ -135,44 +135,80 @@ class PodsumCliTest(unittest.TestCase):
         self.assertFalse(catalog["safe_defaults"]["fetches_links"])
         self.assertFalse(catalog["safe_defaults"]["calls_hermes"])
         self.assertFalse(catalog["safe_defaults"]["sends"])
+        self.assertEqual(catalog["scenarios"], [object_harness.CURRENT_SCENARIO])
         for object_type in object_harness.OBJECT_TYPES:
             group = catalog["groups"][object_type]
-            self.assertEqual(set(group["scenarios"]), set(object_harness.SCENARIOS))
-            for fixture in group["fixtures"]:
-                self.assertTrue(fixture["privacy_safe"])
-                self.assertEqual(fixture["object"]["object_type"], {
-                    "email_topic_map": "email_topic_map",
-                    "email_evidence_policy": "email_evidence_policy",
-                    "email_evidence_pack": "email_evidence_pack",
-                    "email_intel_brief": "email_intel_brief",
-                    "evidence_need_queue": "evidence_need_store",
-                }[object_type])
+            self.assertEqual(group["scenarios"], [object_harness.CURRENT_SCENARIO])
+            self.assertEqual(group["fixtures"], [])
+            self.assertEqual(group["current_source"]["scenario"], object_harness.CURRENT_SCENARIO)
+            self.assertEqual(group["current_source"]["fixture_source"], "workbench_artifact")
+            self.assertFalse(group["current_source"]["privacy_safe"])
 
     def test_email_object_harness_session_events_and_import_validation(self) -> None:
-        session = object_harness.new_session("email_evidence_pack", "normal")
+        current_object = {
+            "object_type": "email_evidence_pack",
+            "status": "ready_for_summary",
+            "date": "2026-07-05",
+            "raw_count": 1,
+            "items": [{"uid": "77", "flags": [], "_review": {}}],
+        }
+        session = object_harness.new_session_from_object(
+            "email_evidence_pack",
+            current_object,
+            ("current_workbench_artifact",),
+            (),
+        )
         before_version = session.to_dict()["version_history"][-1]["version"]
 
-        cleared = object_harness.apply_event(session, "clear_data", {}, "test")
-        cleared_payload = cleared.to_dict()
-        self.assertEqual(cleared_payload["lifecycle_status"], "edited")
-        self.assertEqual(cleared_payload["current_object"]["items"], [])
-        self.assertEqual(cleared_payload["event_log"][-1]["before_version"], before_version)
-        self.assertNotEqual(cleared_payload["event_log"][-1]["after_version"], before_version)
-        self.assertEqual(cleared_payload["renderer"]["contract"], object_harness.RENDERER_CONTRACT)
+        marked = object_harness.apply_event(session, "mock_evidence_agent", {}, "test")
+        marked_payload = marked.to_dict()
+        self.assertEqual(marked_payload["lifecycle_status"], "edited")
+        self.assertIn("harness_mock_evidence_agent", marked_payload["current_object"]["items"][0]["flags"])
+        self.assertEqual(marked_payload["event_log"][-1]["before_version"], before_version)
+        self.assertNotEqual(marked_payload["event_log"][-1]["after_version"], before_version)
+        self.assertEqual(marked_payload["renderer"]["contract"], object_harness.RENDERER_CONTRACT)
+        self.assertFalse(marked_payload["privacy_safe"])
 
-        validated = object_harness.apply_event(cleared, "validate_object", {}, "test")
+        validated = object_harness.apply_event(marked, "validate_object", {}, "test")
         self.assertEqual(validated.to_dict()["lifecycle_status"], "validated")
         exported = object_harness.export_session_fixture(validated)
         self.assertEqual(exported["selected_object_type"], "email_evidence_pack")
-        self.assertTrue(exported["privacy_safe"])
-        imported = object_harness.import_session_fixture("email_evidence_pack", "normal", exported["fixture"])
+        self.assertFalse(exported["privacy_safe"])
+        imported = object_harness.import_session_fixture("email_evidence_pack", "current", exported["fixture"])
         self.assertEqual(imported.to_dict()["current_object"]["object_type"], "email_evidence_pack")
-        with self.assertRaisesRegex(ValueError, "object_type=email_evidence_pack"):
-            object_harness.import_session_fixture("email_evidence_pack", "normal", {"object_type": "wrong"})
+        with self.assertRaisesRegex(ValueError, "email_evidence_pack"):
+            object_harness.import_session_fixture("email_evidence_pack", "current", {"object_type": "wrong"})
 
     def test_email_object_harness_http_api_uses_shared_renderer_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
+            reports = tmp_path / "downloads" / "EmailReports"
+            reports.mkdir(parents=True)
+            need_store.save_need_store(
+                reports,
+                {
+                    "object_type": "email_need_store",
+                    "object_version": "0.1",
+                    "needs": [
+                        {
+                            "need_id": "need-http",
+                            "status": "open",
+                            "urgency": "high",
+                            "topic_id": "topic-http",
+                            "source_brief_id": "brief-2026-07-05",
+                            "claim_or_question": "HTTP harness question",
+                            "why_needed": "Need current artifact coverage.",
+                            "known_source_refs": ["email://2026-07-05/77"],
+                            "needed_evidence": ["public_link"],
+                            "created_at": "2026-07-05T08:00:00+0800",
+                            "last_checked_at": "2026-07-05T08:00:00+0800",
+                            "resolved_by": [],
+                            "response_policy": "emit_need_reference_only",
+                            "audit_trail": [],
+                        }
+                    ],
+                },
+            )
             config = email_workbench.WorkbenchConfig(
                 root=tmp_path / "downloads",
                 date="2026-07-05",
@@ -186,7 +222,7 @@ class PodsumCliTest(unittest.TestCase):
                 shell = get_text(base_url, "/harness")
                 context = get_json(base_url, "/api/context")
                 catalog = get_json(base_url, "/api/harness/catalog")
-                loaded = get_json(base_url, "/api/harness/session?object_type=evidence_need_queue&scenario=conflict")
+                loaded = get_json(base_url, "/api/harness/session?object_type=evidence_need_queue&scenario=current")
                 session = loaded["session"]
                 closed = post_json(
                     base_url,
@@ -197,11 +233,115 @@ class PodsumCliTest(unittest.TestCase):
                 stop_workbench(server, thread)
 
             self.assertIn("Podsum Email Object Harness", shell)
+            self.assertIn("Load current artifact", shell)
+            self.assertNotIn("low_quality", shell)
             self.assertEqual(context["server"]["renderer_contract"], object_harness.RENDERER_CONTRACT)
             self.assertEqual(catalog["catalog"]["renderer_contract"], object_harness.RENDERER_CONTRACT)
+            self.assertEqual(catalog["catalog"]["scenarios"], ["current"])
             self.assertEqual(session["renderer"]["contract"], object_harness.RENDERER_CONTRACT)
+            self.assertEqual(session["fixture_source"], "workbench_artifact")
             self.assertEqual(closed["session"]["current_object"]["needs"][0]["status"], "closed")
             self.assertEqual(closed["session"]["event_log"][-1]["event_type"], "close_need")
+
+    def test_email_object_harness_current_source_loads_formal_workbench_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            reports = tmp_path / "downloads" / "EmailReports"
+            reports.mkdir(parents=True)
+            scan = {
+                "object_type": "email_evidence_pack",
+                "status": "ready_for_summary",
+                "date": "2026-07-05",
+                "account": "fixture@example.invalid",
+                "window": "1d",
+                "scan_limit": 10,
+                "raw_count": 1,
+                "possibly_truncated": False,
+                "items": [
+                    {
+                        "uid": "77",
+                        "date": "Sun, 05 Jul 2026 08:00:00 +0800",
+                        "from": "Fixture Sender <sender@example.invalid>",
+                        "subject": "Current artifact mail",
+                        "snippet": "A current artifact email for harness loading.",
+                        "has_attachments": False,
+                        "email_type": "personal",
+                        "links": [],
+                        "evidence": [],
+                        "risks": ["snippet_only"],
+                        "flags": [],
+                    }
+                ],
+            }
+            summary = (
+                "# Podsum Email Summary 2026-07-05\n\n"
+                "## key takeaway\n\n"
+                "Current artifact summary.\n\n"
+                "## 来源索引\n\n"
+                "- UID=77 | From=Fixture Sender <sender@example.invalid> | "
+                "Subject=Current artifact mail | Date=Sun, 05 Jul 2026 08:00:00 +0800 | "
+                "`email://2026-07-05/77`\n"
+            )
+            (reports / "email-scan-2026-07-05.json").write_text(json.dumps(scan), encoding="utf-8")
+            (reports / "email-summary-2026-07-05.md").write_text(summary, encoding="utf-8")
+            need_store.save_need_store(
+                reports,
+                {
+                    "object_type": "email_need_store",
+                    "object_version": "0.1",
+                    "needs": [
+                        {
+                            "need_id": "need-current",
+                            "status": "open",
+                            "urgency": "high",
+                            "topic_id": "topic-current",
+                            "source_brief_id": "brief-2026-07-05",
+                            "claim_or_question": "Current harness question",
+                            "why_needed": "Need current artifact coverage.",
+                            "known_source_refs": ["email://2026-07-05/77"],
+                            "needed_evidence": ["public_link"],
+                            "created_at": "2026-07-05T08:00:00+0800",
+                            "last_checked_at": "2026-07-05T08:00:00+0800",
+                            "resolved_by": [],
+                            "response_policy": "emit_need_reference_only",
+                            "audit_trail": [],
+                        }
+                    ],
+                },
+            )
+            config = email_workbench.WorkbenchConfig(
+                root=tmp_path / "downloads",
+                date="2026-07-05",
+                host="127.0.0.1",
+                port=0,
+                policy_file=ROOT / "outputs" / "email_link_policy.md",
+                topic_file=ROOT / "outputs" / "topic.md",
+            )
+            server, thread, base_url = start_workbench(config)
+            try:
+                topics = get_json(base_url, "/api/topics")["topic_map"]
+                policy = get_json(base_url, "/api/policy")["policy"]
+                evidence = get_json(base_url, "/api/evidence-pack")["scan"]
+                brief = get_json(base_url, "/api/intel-brief")
+                brief.pop("ok")
+                needs = get_json(base_url, "/api/needs")["store"]
+                current_topics = get_json(base_url, "/api/harness/session?object_type=email_topic_map&scenario=current")["session"]
+                current_policy = get_json(base_url, "/api/harness/session?object_type=email_evidence_policy&scenario=current")["session"]
+                current_evidence = get_json(base_url, "/api/harness/session?object_type=email_evidence_pack&scenario=current")["session"]
+                current_brief = get_json(base_url, "/api/harness/session?object_type=email_intel_brief&scenario=current")["session"]
+                current_needs = get_json(base_url, "/api/harness/session?object_type=evidence_need_queue&scenario=current")["session"]
+            finally:
+                stop_workbench(server, thread)
+
+            self.assertEqual(current_topics["current_object"], topics)
+            self.assertEqual(current_policy["current_object"], policy)
+            self.assertEqual(current_evidence["current_object"], evidence)
+            self.assertEqual(current_brief["current_object"], brief)
+            self.assertEqual(current_needs["current_object"], needs)
+            self.assertEqual(current_evidence["selected_fixture"], object_harness.CURRENT_SCENARIO)
+            self.assertEqual(current_evidence["fixture_source"], "workbench_artifact")
+            self.assertIn("current_workbench_artifact", current_evidence["risks"])
+            self.assertEqual(current_evidence["version_history"][0]["reason"], "load_current_workbench_artifact")
 
     def test_email_workbench_help_exists(self) -> None:
         result = run_podsum("email-workbench", "--help")
