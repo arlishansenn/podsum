@@ -1,0 +1,19 @@
+{
+  "account": "fixture@example.invalid",
+  "date": "2026-07-05",
+  "items": [
+    {
+      "date": "Sun, 05 Jul 2026 08:00:00 +0800",
+      "flags": [],
+      "from": "Fixture Sender <sender@example.invalid>",
+      "has_attachments": false,
+      "snippet": "Synthetic fixture scan item for a truncated email window.",
+      "subject": "Fixture Truncated Scan Item",
+      "uid": "9001"
+    }
+  ],
+  "possibly_truncated": true,
+  "raw_count": 7,
+  "scan_limit": 5,
+  "window": "7d"
+}

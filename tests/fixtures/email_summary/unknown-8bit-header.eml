@@ -1,0 +1,12 @@
+X-Podsum-Fixture-UID: 203
+From: =?unknown-8bit?Q?Fixture_Exmail_Sender?= <sender-203@example.invalid>
+To: Fixture Recipient <recipient@example.invalid>
+Subject: =?unknown-8bit?Q?Fixture_Unknown_8bit_Header?=
+Date: Sun, 05 Jul 2026 08:05:00 +0800
+Message-ID: <fixture-unknown-8bit-header@example.invalid>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="unknown-8bit"
+Content-Transfer-Encoding: 8bit
+
+Fixture body with unknown charset marker.
+This synthetic text keeps parser coverage without real content.

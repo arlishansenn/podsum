@@ -424,6 +424,47 @@ class PodsumCliTest(unittest.TestCase):
             self.assertTrue(copied_scan.exists())
             self.assertIn("dry-run: skipped Hermes summary", report.read_text(encoding="utf-8"))
 
+    def test_email_summary_uses_empty_scan_file_without_real_imap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            result = run_podsum(
+                "email-summary",
+                "--scan-file",
+                str(ROOT / "tests" / "fixtures" / "email_summary_scans" / "email-scan-empty.json"),
+                "--output",
+                str(tmp_path / "downloads"),
+                "--dry-run",
+                "--no-send",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            report = tmp_path / "downloads" / "EmailReports" / "email-summary-2026-07-05.md"
+            copied_scan = tmp_path / "downloads" / "EmailReports" / "email-scan-2026-07-05.json"
+            scan = json.loads(copied_scan.read_text(encoding="utf-8"))
+            self.assertEqual(scan["raw_count"], 0)
+            self.assertEqual(scan["items"], [])
+            self.assertIn("dry-run: skipped Hermes summary", report.read_text(encoding="utf-8"))
+
+    def test_email_summary_uses_truncated_scan_file_without_real_imap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            result = run_podsum(
+                "email-summary",
+                "--scan-file",
+                str(ROOT / "tests" / "fixtures" / "email_summary_scans" / "email-scan-truncated.json"),
+                "--output",
+                str(tmp_path / "downloads"),
+                "--dry-run",
+                "--no-send",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            report = tmp_path / "downloads" / "EmailReports" / "email-summary-2026-07-05.md"
+            copied_scan = tmp_path / "downloads" / "EmailReports" / "email-scan-2026-07-05.json"
+            scan = json.loads(copied_scan.read_text(encoding="utf-8"))
+            self.assertTrue(scan["possibly_truncated"])
+            self.assertIn("触达上限，可能有遗漏", report.read_text(encoding="utf-8"))
+
     def test_email_summary_uses_eml_dir_without_real_imap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -442,34 +483,22 @@ class PodsumCliTest(unittest.TestCase):
             self.assertEqual(len(scan_files), 1)
             scan = json.loads(scan_files[0].read_text(encoding="utf-8"))
             self.assertEqual(scan["account"], "fixture@example.invalid")
-            self.assertEqual(scan["raw_count"], 3)
-            self.assertEqual({item["uid"] for item in scan["items"]}, {"101", "102", "103"})
+            self.assertEqual(scan["raw_count"], 6)
+            self.assertEqual({item["uid"] for item in scan["items"]}, {"101", "102", "103", "201", "202", "203"})
             self.assertTrue(any(item["has_attachments"] for item in scan["items"]))
             self.assertTrue(any("Google快讯" in item["subject"] for item in scan["items"]))
+            self.assertTrue(any("Exmail Enterprise HTML" in item["subject"] for item in scan["items"]))
+            self.assertTrue(any("Exmail Multipart Digest" in item["subject"] for item in scan["items"]))
+            self.assertTrue(any("Unknown 8bit Header" in item["subject"] for item in scan["items"]))
+            self.assertTrue(any("Fixture newsletter" in item["snippet"] for item in scan["items"]))
 
     def test_email_summary_tolerates_unknown_8bit_charset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            eml_dir = tmp_path / "eml"
-            eml_dir.mkdir()
-            (eml_dir / "unknown-8bit.eml").write_bytes(
-                b"X-Podsum-Fixture-UID: 201\n"
-                b"From: =?unknown-8bit?Q?Fixture_Sender?= <sender@example.invalid>\n"
-                b"To: Fixture Recipient <recipient@example.invalid>\n"
-                b"Subject: =?unknown-8bit?Q?Fixture_Unknown_Encoding?=\n"
-                b"Date: Sun, 05 Jul 2026 08:04:00 +0800\n"
-                b"Message-ID: <fixture-unknown-8bit@example.invalid>\n"
-                b"MIME-Version: 1.0\n"
-                b"Content-Type: text/plain; charset=\"unknown-8bit\"\n"
-                b"Content-Transfer-Encoding: 8bit\n"
-                b"\n"
-                b"Fixture body with unknown charset marker.\n"
-            )
-
             result = run_podsum(
                 "email-summary",
                 "--eml-dir",
-                str(eml_dir),
+                str(ROOT / "tests" / "fixtures" / "email_summary"),
                 "--output",
                 str(tmp_path / "downloads"),
                 "--dry-run",
@@ -479,8 +508,9 @@ class PodsumCliTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             scan_files = list((tmp_path / "downloads" / "EmailReports").glob("email-scan-*.json"))
             scan = json.loads(scan_files[0].read_text(encoding="utf-8"))
-            self.assertEqual(scan["items"][0]["subject"], "Fixture Unknown Encoding")
-            self.assertIn("Fixture body", scan["items"][0]["snippet"])
+            item = next(item for item in scan["items"] if item["uid"] == "203")
+            self.assertEqual(item["subject"], "Fixture Unknown 8bit Header")
+            self.assertIn("Fixture body", item["snippet"])
 
     def test_email_summary_sends_email_specific_epub_with_fake_hermes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

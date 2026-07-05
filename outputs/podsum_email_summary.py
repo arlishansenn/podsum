@@ -271,6 +271,8 @@ def fallback_report(scan: dict[str, Any], reason: str) -> str:
         "## 来源索引",
         "",
     ]
+    if scan.get("possibly_truncated"):
+        lines[9:9] = ["触达上限，可能有遗漏。", ""]
     for item in scan.get("items", []):
         lines.append(
             f"- UID={item.get('uid')} | From={item.get('from')} | "

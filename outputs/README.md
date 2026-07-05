@@ -210,6 +210,23 @@ If both `--scan-file` and `--eml-dir` are provided, `--scan-file` wins. If
 neither is provided, Podsum stops and reminds you to confirm Gmail/IMAP access
 with `--allow-imap-read`.
 
+Email summary verification has three levels:
+
+1. Fixture offline: use `--eml-dir` or `--scan-file` with `--dry-run --no-send`.
+   This validates parsing and local artifacts without IMAP, Hermes, or delivery.
+2. Real scan no-send: use an existing `EmailReports/email-scan-YYYY-MM-DD.json`
+   with `--scan-file --no-send`. This validates Hermes summary generation
+   without rereading IMAP or sending.
+3. Real delivery manual approval: remove `--no-send` only after explicitly
+   approving a live send. Do not add `--email-summary` to launchd until that
+   manual delivery path has been accepted.
+
+Example real-scan validation:
+
+```sh
+/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --scan-file "$HOME/Podcasts/AutoDownloads/EmailReports/email-scan-YYYY-MM-DD.json" --no-send
+```
+
 Generate sanitized fixtures from local raw `.eml` files:
 
 ```sh

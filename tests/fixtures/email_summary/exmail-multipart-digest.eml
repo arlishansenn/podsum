@@ -1,0 +1,40 @@
+X-Podsum-Fixture-UID: 202
+From: Fixture Exmail Sender 002 <sender-202@example.invalid>
+To: Fixture Recipient <recipient@example.invalid>
+Subject: Fixture Exmail Multipart Digest
+Date: Sun, 05 Jul 2026 08:02:00 +0800
+Message-ID: <fixture-exmail-multipart-digest@example.invalid>
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary="===============0649377494076466077=="
+
+--===============0649377494076466077==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Fixture plain message 002. This sanitized body preserves approximate length a=
+nd link shape without real content. https://example.invalid/item-1 https://ex=
+ample.invalid/item-2 https://example.invalid/item-3 https://example.invalid/i=
+tem-4 https://example.invalid/item-5 Sanitized fixture sentence for parser co=
+verage. Sanitized fixture sentence for parser coverage. Sanitized fixture sen=
+tence for parser coverage. Sanitized fixture sentence for parser coverage. Sa=
+nitized fixture sentence for parser coverage. Sanitized fixture sentence for =
+parser coverage. Sanitized fixture sentence for parser coverage. Sanitized fi=
+xture sentence for parser coverage. Sanitized fixture sentence for parser cov=
+erage. Sanitized fixture sentence for parser coverage. Sanitized fixture sent=
+ence for parser coverage. Sani
+
+--===============0649377494076466077==
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+<html><body><h1>Fixture HTML message 002</h1><p>This sanitized HTML preserves=
+ structure without real content.</p><ul><li><a href=3D"https://example.invali=
+d/item-1">Fixture link 1</a></li><li><a href=3D"https://example.invalid/item-=
+2">Fixture link 2</a></li><li><a href=3D"https://example.invalid/item-3">Fixt=
+ure link 3</a></li><li><a href=3D"https://example.invalid/item-4">Fixture lin=
+k 4</a></li><li><a href=3D"https://example.invalid/item-5">Fixture link 5</a>=
+</li></ul></body></html>
+
+--===============0649377494076466077==--

@@ -1,0 +1,9 @@
+{
+  "account": "fixture@example.invalid",
+  "date": "2026-07-05",
+  "items": [],
+  "possibly_truncated": false,
+  "raw_count": 0,
+  "scan_limit": 5,
+  "window": "7d"
+}
