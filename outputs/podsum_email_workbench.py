@@ -238,8 +238,15 @@ SECTION_RE = re.compile(r"^##\s+(?P<title>.+?)\s*$", flags=re.MULTILINE)
 
 def parse_source_index(markdown: str) -> list[dict[str, str]]:
     sources: list[dict[str, str]] = []
+    seen: set[str] = set()
     for match in SOURCE_RE.finditer(markdown):
-        sources.append({key: value.strip() for key, value in match.groupdict().items()})
+        source = {key: value.strip() for key, value in match.groupdict().items()}
+        source_uid = source.get("source_uid") or source.get("uid") or ""
+        if source_uid in seen:
+            continue
+        seen.add(source_uid)
+        source["uid"] = source_uid
+        sources.append(source)
     return sources
 
 

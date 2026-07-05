@@ -1070,9 +1070,7 @@ def item_brief_block(scan: dict[str, Any], item: dict[str, Any], *, conclusion: 
         f"- 结论：{conclusion}",
         f"  - 依据：{excerpt or '没有可用正文片段'}（{evidence_gap_text(item)}）",
         f"  - 建议动作：{action}",
-        f"  - 来源：UID={item.get('uid')} / From={item.get('from')} / "
-        f"Subject={item.get('subject')} / Date={item.get('date')} / "
-        f"`email://{scan['date']}/{item.get('uid')}`",
+        f"  - 来源：{source_index_line(scan, item).removeprefix('- ')}",
     ]
 
 

@@ -534,6 +534,7 @@ class PodsumCliTest(unittest.TestCase):
 
         markdown = email_summary.build_intel_brief_draft(scan, "dry-run: skipped Hermes summary")
         checklist = email_summary.review_checklist(scan, markdown)
+        sources = email_workbench.parse_source_index(markdown)
 
         self.assertIn("对象: EmailIntelBrief", markdown)
         self.assertIn("版本: 0.1", markdown)
@@ -543,6 +544,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertIn("触达上限，可能有遗漏", markdown)
         self.assertIn("仅基于邮件摘要", markdown)
         self.assertIn("UID=personal-1", markdown)
+        self.assertEqual([source["source_uid"] for source in sources], ["personal-1", "alert-1"])
         self.assertTrue(checklist["ready_to_send"])
 
     def test_run_once_downloads_only_latest_episode_per_feed(self) -> None:
