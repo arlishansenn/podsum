@@ -57,6 +57,17 @@ def write_feed(path: Path, old_audio: Path, new_audio: Path) -> None:
 
 
 class PodsumCliTest(unittest.TestCase):
+    def test_email_summary_prompt_matches_deep_interpretation_style(self) -> None:
+        prompt = (ROOT / "outputs" / "email_summary_prompt.md").read_text(encoding="utf-8")
+
+        self.assertIn("邮件情报深度解读器", prompt)
+        self.assertIn("基本不需要再打开邮箱逐封确认", prompt)
+        self.assertIn("## key takeaway", prompt)
+        self.assertIn("## 如果只记三件事", prompt)
+        self.assertIn("不要把输出写成简单分类清单", prompt)
+        self.assertIn("UID={{uid}} | From={{from}} | Subject={{subject}} | Date={{date}}", prompt)
+        self.assertIn("possibly_truncated=true", prompt)
+
     def test_run_once_downloads_only_latest_episode_per_feed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
