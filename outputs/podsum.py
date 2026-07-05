@@ -15,6 +15,7 @@ from typing import Any
 
 import podcast_downloader as downloader
 import podsum_email_summary as email_summary
+import podsum_email_workbench as email_workbench
 import podsum_send_to_feishu as sender
 
 
@@ -472,6 +473,8 @@ def email_summary_args_from_podsum(args: argparse.Namespace) -> argparse.Namespa
         recent_days=args.email_recent_days,
         limit=args.email_limit,
         email_summary_prompt=args.email_summary_prompt,
+        email_link_policy=args.email_link_policy,
+        enrich_links=args.email_enrich_links,
         project_dir=args.project_dir,
         target=args.target,
         hermes=args.hermes,
@@ -498,6 +501,10 @@ def run_email_summary(args: argparse.Namespace) -> int:
 
 def email_summary_command(args: argparse.Namespace) -> int:
     return run_email_summary(args)
+
+
+def email_workbench_command(args: argparse.Namespace) -> int:
+    return email_workbench.run(args)
 
 
 def load_json_if_exists(path: Path, default: dict[str, Any]) -> dict[str, Any]:
@@ -612,6 +619,8 @@ def add_run_email_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--email-recent-days", type=int, default=email_summary.DEFAULT_RECENT_DAYS)
     parser.add_argument("--email-limit", type=int, default=email_summary.DEFAULT_LIMIT)
     parser.add_argument("--email-summary-prompt", type=Path, default=email_summary.DEFAULT_PROMPT)
+    parser.add_argument("--email-link-policy", type=Path, default=email_summary.DEFAULT_LINK_POLICY)
+    parser.add_argument("--email-enrich-links", action="store_true")
     parser.add_argument("--email-dry-run", action="store_true")
     parser.add_argument("--email-no-send", action="store_true")
     parser.add_argument(
@@ -648,6 +657,10 @@ def build_parser() -> argparse.ArgumentParser:
     email_parser = subparsers.add_parser("email-summary")
     email_summary.add_args(email_parser)
     email_parser.set_defaults(func=email_summary_command)
+
+    workbench_parser = subparsers.add_parser("email-workbench")
+    email_workbench.add_args(workbench_parser)
+    workbench_parser.set_defaults(func=email_workbench_command)
 
     retry_parser = subparsers.add_parser("retry-failed")
     add_common_args(retry_parser)
@@ -705,6 +718,12 @@ def normalize_args(args: argparse.Namespace) -> None:
         args.email_eml_dir = args.email_eml_dir.expanduser()
     if hasattr(args, "email_summary_prompt"):
         args.email_summary_prompt = args.email_summary_prompt.expanduser()
+    if hasattr(args, "email_link_policy"):
+        args.email_link_policy = args.email_link_policy.expanduser()
+    if hasattr(args, "root"):
+        args.root = args.root.expanduser()
+    if hasattr(args, "policy_file"):
+        args.policy_file = args.policy_file.expanduser()
 
 
 def main() -> int:

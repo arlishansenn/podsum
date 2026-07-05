@@ -227,6 +227,53 @@ Example real-scan validation:
 /usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --scan-file "$HOME/Podcasts/AutoDownloads/EmailReports/email-scan-YYYY-MM-DD.json" --no-send
 ```
 
+Email summary is moving toward a compact VIS-style Workbench model:
+
+```text
+EmailPolicyPanel -> EmailEvidencePack -> EmailIntelBrief -> ReviewChecklistPanel -> EPUB / Delivery
+```
+
+- `EmailEvidencePack` and `EmailIntelBrief` are the two core visual work
+  objects.
+- `EmailPolicyPanel` edits the declarative policy spec at
+  `outputs/email_link_policy.md`. `EmailPolicy` is configuration, not a core
+  visual work object.
+- `ReviewChecklistPanel` is the quality gate view inside the Brief review flow,
+  not a separate core visual work object.
+- `EmailEvidencePack` is still written as
+  `EmailReports/email-scan-YYYY-MM-DD.json`. It now includes item links,
+  evidence and risks while staying compatible with older scan JSON files.
+- `EmailIntelBrief` is still written as
+  `EmailReports/email-summary-YYYY-MM-DD.md`. It includes a Review Checklist
+  section as the quality gate view.
+
+The full Email Summary master plan lives at:
+
+```text
+/Users/admin/Desktop/WPS/project/podsum/plans/podsum-email-summary-master-plan.md
+```
+
+The first GUI implementation is a manual local Workbench. It reads existing
+artifacts, writes `EmailReports/email-review-YYYY-MM-DD.json` for human review
+state, and does not read IMAP, call Hermes, send, or modify launchd:
+
+```sh
+/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-workbench --root "$HOME/Podcasts/AutoDownloads" --date YYYY-MM-DD --host 127.0.0.1 --port 8765
+```
+
+By default Podsum extracts links but does not fetch external pages. To enrich
+public article links explicitly:
+
+```sh
+/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --allow-imap-read --enrich-links
+/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --scan-file "$HOME/Podcasts/AutoDownloads/EmailReports/email-scan-YYYY-MM-DD.json" --enrich-links --no-send
+```
+
+`--enrich-links` only fetches public `http`/`https` HTML links allowed by
+EmailPolicy. It skips tracking, unsubscribe, login, attachment, calendar,
+localhost/private-network and non-HTML targets. It does not send cookies,
+execute JavaScript or use a logged-in browser session.
+
 Generate sanitized fixtures from local raw `.eml` files:
 
 ```sh
