@@ -376,9 +376,55 @@ Podsum 必须定义自己的 agent interfaces 和 artifact schema。底层 AI pr
 - 可复用：EvidencePack 可被多次 Brief generation 使用。
 - 可审计：AI 链接分类、确定性规则命中和跳过理由必须进入 artifact。
 - 可替换：AI provider 可替换，agent contract 不变。
+- 可恢复：agent run 可以通过 LangGraph checkpoint 在失败或人工中断后继续。
 - 可视化：核心对象必须能在 Workbench 中看见、筛选、跳转和审核。
 
 ## Implementation Decisions
+
+### Coordination Strategy: LangGraph
+
+Podsum Email Intelligence 第一版使用 LangGraph `StateGraph` 作为 agent/workflow coordination
+framework。LangGraph 负责运行编排、条件路由、checkpoint/resume，以及未来 human-in-the-loop
+和 ResearchAgent subgraph；Podsum 自己的 dataclass artifacts 仍然是领域真相。
+
+体系结构约束：
+
+- MUST 使用 LangGraph 编排 Email Intelligence run，而不是手写长期 orchestrator。
+- MUST 保持 `EmailEvidencePack`、`EmailIntelBrief`、`EvidenceNeedQueue` 等 Podsum dataclass
+  artifacts 作为 source of truth。
+- MUST NOT 把完整 cleaned email/link body 放进 LangGraph state 或 checkpoint；graph state 只存
+  run metadata、artifact paths/ids、transition ids 和错误摘要。
+- MUST 让 graph nodes 成为纯函数模块的薄 wrapper，例如调用 `build_evidence_pack()`、
+  `compose_brief()`、`reconcile_needs()`，而不是在 node 里隐藏领域逻辑。
+- MUST 把副作用集中在显式 persist nodes，并保证这些 nodes 幂等；LangGraph resume 时 node
+  可能从头重跑。
+- MUST 保持 `EvidenceNeedStore` 为领域 store；LangGraph checkpointer 只负责 run resume，不能
+  成为 need 的长期真相源。
+- MUST NOT 把 Podsum evidence 转成不可追溯的 LangChain `Document`/message soup；source refs
+  必须保留在 Podsum artifacts 中。
+- SHOULD 在 fixture tests 中使用 in-memory checkpointer；需要本地 resume 或 human interrupt 时使用
+  SQLite checkpointer。
+- SHOULD 把未来 `ResearchAgent` 实现为 LangGraph subgraph。该 subgraph 输出 `ResearchRun`
+  artifact，再由 EvidencePack 吸收；它不能直接修改 `EmailIntelBrief`。
+
+第一版 graph：
+
+```text
+START
+  -> load_inputs
+  -> build_evidence_pack
+  -> classify_links
+  -> persist_evidence_pack
+  -> load_need_queue
+  -> compose_brief
+  -> reconcile_needs
+  -> persist_needs
+  -> persist_brief
+  -> END
+```
+
+`EmailRunState` 只保存轻量状态，例如 `run_id`、`account_id`、`date`、`policy_path`、
+`topic_map_path`、`evidence_pack_path`、`brief_path`、`needs_path`、`transitions` 和 `errors`。
 
 ### Object and Schema Strategy
 
@@ -391,13 +437,14 @@ Markdown artifacts。状态字段使用 `Literal[...]` 表达允许值，不引�
 
 ### Module Shape
 
-建议把现有单体邮件流程拆成几个深模块：
+建议把现有单体邮件流程拆成几个深模块，并用 LangGraph 连接这些模块：
 
 - `EmailEvidenceAgent`：对外提供 build、enrich、classify_links。
 - `EmailIntelBriefAgent`：对外提供 compose、emit_needs、reconcile_needs。
 - `EvidenceNeedStore`：负责全局 `email-needs.json`，持久化 active needs、历史响应和状态迁移。
 - `EvidencePackStore`：负责 pack 版本、source refs 和 sidecar 关系。
 - `SummaryProvider`：Podsum local、Hermes、fake provider 等适配层。
+- `EmailRunGraph`：LangGraph `StateGraph`，负责把上述模块编排成可 checkpoint/resume 的 run。
 
 内部可以继续复用现有 reader、link enrichment、topic matching 和 Workbench API，
 但对外边界要从 pipeline 函数升级为 agent contract。
@@ -477,6 +524,11 @@ Workbench 第一轮不用做完整 agent 控制台，但要让用户看见 agent
   - truncated scan keeps boundary warning。
   - unknown charset fixture keeps source refs and charset risk。
 
+- Graph tests:
+  - EmailRunGraph executes fixture-only run end-to-end.
+  - EmailRunState checkpoints contain artifact paths, not cleaned bodies.
+  - persist nodes are idempotent under node re-execution.
+
 - Workbench tests:
   - EvidenceNeed queue renders.
   - Brief generated needs render.
@@ -493,15 +545,17 @@ Workbench 第一轮不用做完整 agent 控制台，但要让用户看见 agent
 ## Rollout Plan
 
 1. Freeze this PRD and reconcile current master plan wording.
-2. Add dataclass schemas for core objects, `EvidenceNeed`, and `EvidenceNeedStore`.
-3. Extract current evidence generation into `EmailEvidenceAgent` facade without changing behavior.
-4. Add deterministic link policy + topic keyword selection boundaries.
-5. Add auditable `LinkContentClassifier` seam and fake provider tests.
-6. Extract current brief generation into `EmailIntelBriefAgent` facade without changing behavior.
-7. Add BriefAgent need emission and reconciliation logic for immediate, watching and blocked cases.
-8. Add Workbench visualization for `EvidenceNeedQueue` as an independent Needs tab.
-9. Add future-scan reconciliation test where new evidence satisfies an old need.
-10. Run full regression and only then consider real IMAP manual validation.
+2. Add LangGraph dependency and define `EmailRunState` with lightweight artifact references.
+3. Add dataclass schemas for core objects, `EvidenceNeed`, and `EvidenceNeedStore`.
+4. Extract current evidence generation into `EmailEvidenceAgent` pure function facade without changing behavior.
+5. Add deterministic link policy + topic keyword selection boundaries.
+6. Add auditable `LinkContentClassifier` seam and fake provider tests.
+7. Extract current brief generation into `EmailIntelBriefAgent` pure function facade without changing behavior.
+8. Add LangGraph `EmailRunGraph` nodes around the pure functions and prove fixture-only graph execution.
+9. Add BriefAgent need emission and reconciliation logic for immediate, watching and blocked cases.
+10. Add Workbench visualization for `EvidenceNeedQueue` as an independent Needs tab.
+11. Add future-scan reconciliation test where new evidence satisfies an old need.
+12. Run full regression and only then consider real IMAP manual validation.
 
 ## Open Questions
 
