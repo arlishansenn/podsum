@@ -18,7 +18,9 @@ def podsum_python() -> str:
     candidate = platform_venv_python()
     if candidate.exists():
         return str(candidate)
-    return sys.executable
+    raise RuntimeError(
+        "Podsum requires a virtual-environment Python. Set PODSUM_PYTHON or install the application venv."
+    )
 
 
 def running_inside_virtualenv() -> bool:
