@@ -113,7 +113,7 @@ def build_evidence_pack(state: EmailRunState, config: RunnableConfig) -> dict[st
     scan = _scan(context)
     pack = evidence_agent.normalize_evidence_pack(scan, context.policy)
     if context.enrich_links:
-        pack = evidence_agent.enrich_scan_links(pack, context.policy, context.fetcher)
+        pack = evidence_agent.enrich_scan_links(pack, context.policy, context.fetcher, context.topic_map)
     context.pack = pack
     return _transition(state, "build_evidence_pack")
 

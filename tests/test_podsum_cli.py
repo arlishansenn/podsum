@@ -1299,6 +1299,124 @@ class PodsumCliTest(unittest.TestCase):
         self.assertEqual(link_evidence[0]["status"], "skipped")
         self.assertIn("track", link_evidence[0]["reason"])
 
+    def test_topic_guided_link_triage_selects_only_matching_canonical_targets(self) -> None:
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy["limits"]["max_links_total"] = 3
+        policy["limits"]["max_links_per_email"] = 2
+        calls: list[str] = []
+        links = [
+            {"url": "https://alerts.google.com/unsubscribe?token=1", "anchor_text": "unsubscribe", "context": "unsubscribe"},
+            {"url": "https://www.google.com/url?url=https%3A%2F%2Fsource.example%2Fai-agents%3Futm_source%3Dalert%26gclid%3D1", "anchor_text": "AI agents", "context": "New report about agentic systems"},
+            {"url": "https://source.example/ai-agents?utm_medium=email", "anchor_text": "Duplicate", "context": "Same source"},
+            {"url": "https://early.example/market", "anchor_text": "Market", "context": "Market update"},
+            {"url": "https://social.example/share?url=https%3A%2F%2Fsource.example%2Fai-agents", "anchor_text": "share", "context": "Share"},
+        ]
+        for index in range(100):
+            links.append({"url": f"https://irrelevant.example/item-{index}", "anchor_text": f"Other {index}", "context": "sports and coupons"})
+        links.append({"url": "https://late.example/frontier-models", "anchor_text": "Frontier models", "context": "AI agents benchmark"})
+        scan = {
+            "date": "2026-07-05",
+            "items": [
+                {
+                    "uid": "UID-1003",
+                    "from": "Google Alerts <googlealerts-noreply@google.com>",
+                    "subject": "Google Alert - AI agents",
+                    "snippet": "AI agents and frontier models updates.",
+                    "email_type": "google_alert",
+                    "links": links,
+                    "evidence": [],
+                    "risks": ["snippet_only"],
+                }
+            ],
+        }
+        topic_map = {
+            "object_type": "email_topic_map",
+            "version": 1,
+            "topics": [
+                {
+                    "id": "ai_agents",
+                    "name": "AI Agents",
+                    "priority": "high",
+                    "keywords": ["ai agents", "frontier models"],
+                    "aliases": ["agentic systems"],
+                    "description": "AI agent research",
+                    "examples": ["benchmark"],
+                    "non_examples": ["coupons"],
+                }
+            ],
+        }
+
+        def fake_fetcher(url: str, timeout: int, excerpt_chars: int) -> dict[str, str]:
+            calls.append(url)
+            return {
+                "url": url,
+                "final_url": url,
+                "title": f"Fetched {url}",
+                "excerpt": "Fetched public article excerpt.",
+                "status": "fetched",
+                "reason": "",
+                "content_type": "text/html",
+            }
+
+        enriched = email_summary.enrich_scan_links(email_summary.normalize_evidence_pack(scan, policy), policy, fetcher=fake_fetcher, topic_map=topic_map)
+        item = enriched["items"][0]
+        triage = item["link_triage"]
+        decisions = [group["decision"] for group in triage["groups"]]
+        reasons = [group["reason"] for group in triage["groups"]]
+
+        self.assertEqual(triage["total_links"], 106)
+        self.assertEqual(triage["selected_fetch_count"], 2)
+        self.assertGreaterEqual(triage["hard_skipped_count"], 2)
+        self.assertGreaterEqual(triage["deduped_count"], 1)
+        self.assertIn("dedupe", decisions)
+        self.assertIn("defer:unmapped_topic", reasons)
+        self.assertIn("https://source.example/ai-agents", calls)
+        self.assertIn("https://late.example/frontier-models", calls)
+        self.assertEqual(calls, ["https://source.example/ai-agents", "https://late.example/frontier-models"])
+        self.assertNotIn("https://alerts.google.com/unsubscribe?token=1", calls)
+        self.assertNotIn("https://early.example/market", calls)
+        self.assertIn("unmapped_alert_topic", item["risks"])
+        fetched_urls = [evidence["url"] for evidence in item["evidence"] if evidence.get("type") == "public_link" and evidence.get("status") == "fetched"]
+        self.assertEqual(fetched_urls, calls)
+
+    def test_topic_guided_link_triage_blocks_unmapped_alert_until_topic_matches(self) -> None:
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy["limits"]["max_links_total"] = 2
+        policy["limits"]["max_links_per_email"] = 2
+        scan = {
+            "date": "2026-07-05",
+            "items": [
+                {
+                    "uid": "UID-1003",
+                    "from": "Google Alerts <googlealerts-noreply@google.com>",
+                    "subject": "Google Alert - Synthetic biology",
+                    "snippet": "A new result is available.",
+                    "email_type": "google_alert",
+                    "links": [{"url": "https://science.example/synbio-breakthrough", "anchor_text": "Synbio", "context": "Synthetic biology breakthrough"}],
+                    "evidence": [],
+                    "risks": ["snippet_only"],
+                }
+            ],
+        }
+        unmatched_topic_map = {"object_type": "email_topic_map", "version": 1, "topics": [{"id": "ai", "name": "AI", "priority": "high", "keywords": ["frontier model"]}]}
+        matched_topic_map = {"object_type": "email_topic_map", "version": 1, "topics": [{"id": "bio", "name": "Bio", "priority": "high", "keywords": ["synthetic biology"]}]}
+        calls: list[str] = []
+
+        def fake_fetcher(url: str, timeout: int, excerpt_chars: int) -> dict[str, str]:
+            calls.append(url)
+            return {"url": url, "final_url": url, "title": "Fetched", "excerpt": "Fetched", "status": "fetched", "reason": "", "content_type": "text/html"}
+
+        unmapped = email_summary.enrich_scan_links(email_summary.normalize_evidence_pack(json.loads(json.dumps(scan)), policy), policy, fetcher=fake_fetcher, topic_map=unmatched_topic_map)
+        self.assertEqual(calls, [])
+        self.assertEqual(unmapped["items"][0]["link_triage"]["selected_fetch_count"], 0)
+        self.assertEqual(unmapped["items"][0]["link_triage"]["groups"][0]["reason"], "defer:unmapped_topic")
+        self.assertIn("unmapped_alert_topic", unmapped["items"][0]["risks"])
+
+        matched = email_summary.enrich_scan_links(email_summary.normalize_evidence_pack(json.loads(json.dumps(scan)), policy), policy, fetcher=fake_fetcher, topic_map=matched_topic_map)
+        self.assertEqual(calls, ["https://science.example/synbio-breakthrough"])
+        self.assertEqual(matched["items"][0]["link_triage"]["selected_fetch_count"], 1)
+        self.assertEqual(matched["items"][0]["link_triage"]["groups"][0]["decision"], "fetch")
+
     def test_email_link_budget_exhaustion_writes_skipped_evidence(self) -> None:
         policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
         policy["limits"]["max_links_total"] = 1

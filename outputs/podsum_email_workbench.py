@@ -1492,6 +1492,22 @@ function renderEmailDetail(item) {
       : policy.fetch_links
         ? "Review link evidence results before approving the Brief."
         : `No fetch: policy_no_fetch:${policy.name || "unknown"}.`;
+  const triage = item.link_triage || {};
+  const triageGroups = triage.groups || [];
+  const triageSummary = item.link_triage ? [
+      `total ${triage.total_links || 0}`,
+      `fetch ${triage.selected_fetch_count || 0}`,
+      `defer ${triage.deferred_count || 0}`,
+      `skip ${triage.hard_skipped_count || 0}`,
+      `dedupe ${triage.deduped_count || 0}`,
+      `unmapped ${triage.unmapped_topic_count || 0}`,
+    ].join(" · ") : "No link triage recorded.";
+  const triageRows = triageGroups.map((group) => `<tr>
+      <td>${escapeHtml(group.decision || "")}</td>
+      <td>${escapeHtml(group.reason || "")}</td>
+      <td>${escapeHtml((group.topics || []).map((topic) => topic.name || topic.id || "").join(", "))}</td>
+      <td>${escapeHtml(group.canonical_url || group.url || "")}</td>
+    </tr>`).join("");
   const linkRows = links.map((link) => `<tr>
       <td>${escapeHtml(link.policy_decision || "pending")}</td>
       <td>${escapeHtml(link.anchor_text || "")}</td>
@@ -1527,8 +1543,13 @@ function renderEmailDetail(item) {
     <h3>3. Link Decision</h3>
     <p>${badge(policy.fetch_links ? "fetch links" : "snippet only", policy.fetch_links ? "good" : "skipped")} ${escapeHtml(policy.summary_focus || "")}</p>
     <p class="notice">${escapeHtml(nextAction)}</p>
+    <p class="meta">${escapeHtml(triageSummary)}</p>
     <table>
-      <thead><tr><th>decision</th><th>anchor</th><th>context</th><th>url</th></tr></thead>
+      <thead><tr><th>triage</th><th>reason</th><th>topics</th><th>canonical url</th></tr></thead>
+      <tbody>${triageRows || `<tr><td colspan="4">No triage groups.</td></tr>`}</tbody>
+    </table>
+    <table>
+      <thead><tr><th>decision</th><th>anchor</th><th>context</th><th>raw url</th></tr></thead>
       <tbody>${linkRows || `<tr><td colspan="4">No links detected.</td></tr>`}</tbody>
     </table>
 

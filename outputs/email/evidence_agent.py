@@ -43,8 +43,9 @@ def enrich_scan_links(
     pack: EmailEvidencePack | dict[str, Any],
     policy: dict[str, Any],
     fetcher: Any,
+    topic_map: dict[str, Any] | None = None,
 ) -> EmailEvidencePack:
-    enriched = _legacy().enrich_scan_links(_pack_to_dict(pack), policy, fetcher)
+    enriched = _legacy().enrich_scan_links(_pack_to_dict(pack), policy, fetcher, topic_map)
     return _pack_from_dict(enriched)
 
 
@@ -84,7 +85,7 @@ def build_evidence_pack_with_classifier(
 ) -> EmailEvidencePack:
     pack = normalize_evidence_pack(scan, policy)
     if enrich_links:
-        pack = enrich_scan_links(pack, policy, fetcher)
+        pack = enrich_scan_links(pack, policy, fetcher, topic_map)
     pack = classify_evidence_links(pack, policy, classifier, confidence_threshold)
     return apply_topics(pack, topic_map)
 

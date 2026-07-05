@@ -828,6 +828,234 @@ def public_link_evidence_urls(item: dict[str, Any]) -> set[str]:
     return urls
 
 
+HARD_SKIP_URL_TERMS = (
+    "unsubscribe",
+    "optout",
+    "opt-out",
+    "manage alert",
+    "manage-alert",
+    "create alert",
+    "create-alert",
+    "login",
+    "signin",
+    "sign-in",
+    "tracking",
+    "track",
+    "pixel",
+    "share=",
+    "share?",
+    "/share/",
+    "calendar",
+    ".ics",
+    "attachment",
+    "download",
+)
+TRACKING_QUERY_KEYS = {
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "utm_id",
+    "gclid",
+    "fbclid",
+    "mc_cid",
+    "mc_eid",
+    "igshid",
+    "ref",
+    "ref_src",
+}
+
+
+def hard_skip_reason_for_url(url: str) -> str:
+    raw = url.strip()
+    lowered = raw.lower()
+    if not raw:
+        return "hard_skip:empty_url"
+    if lowered.startswith("mailto:"):
+        return "hard_skip:mailto"
+    parsed = urllib.parse.urlsplit(raw)
+    host = parsed.hostname or ""
+    if host in {"localhost", "127.0.0.1", "0.0.0.0", "::1"}:
+        return "hard_skip:localhost"
+    try:
+        if host and ipaddress.ip_address(host).is_private:
+            return "hard_skip:private"
+    except ValueError:
+        pass
+    combined = " ".join([lowered, urllib.parse.unquote_plus(lowered)])
+    for term in HARD_SKIP_URL_TERMS:
+        if term in combined:
+            reason = term.strip("/=").replace(" ", "_").replace("-", "_")
+            return f"hard_skip:{reason}"
+    return ""
+
+
+def canonical_link_target(url: str) -> str:
+    raw = url.strip()
+    parsed = urllib.parse.urlsplit(raw)
+    query_pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path or "/"
+    if host.endswith("google.com") and path.startswith("/url"):
+        for key, value in query_pairs:
+            if key.lower() in {"url", "q"} and value:
+                target = canonical_link_target(value)
+                if target:
+                    return target
+    kept = [(key, value) for key, value in query_pairs if key.lower() not in TRACKING_QUERY_KEYS and not key.lower().startswith("utm_")]
+    query = urllib.parse.urlencode(kept, doseq=True)
+    path = parsed.path or "/"
+    if path != "/":
+        path = path.rstrip("/") or "/"
+    return urllib.parse.urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, query, "")) if parsed.scheme and parsed.netloc else ""
+
+
+def topic_candidate_text(item: dict[str, Any], link: dict[str, Any], canonical_url: str) -> str:
+    parsed = urllib.parse.urlsplit(canonical_url)
+    parts = [
+        str(item.get("subject") or ""),
+        str(item.get("snippet") or ""),
+        str(link.get("anchor_text") or ""),
+        str(link.get("context") or ""),
+        parsed.netloc,
+        parsed.path,
+    ]
+    return "\n".join(parts).lower()
+
+
+def topic_match_terms(topic: dict[str, Any]) -> list[str]:
+    terms = topic_keywords(topic)
+    for key in ("description", "summary_focus"):
+        value = str(topic.get(key) or "").strip()
+        if value:
+            terms.extend([part for part in re.split(r"[,，;；\n]", value) if part.strip()])
+    for key in ("examples",):
+        values = topic.get(key, [])
+        if isinstance(values, list):
+            terms.extend(str(item) for item in values if str(item).strip())
+    return [term.strip().lower() for term in terms if term.strip()]
+
+
+def topic_negative_terms(topic: dict[str, Any]) -> list[str]:
+    values = topic.get("non_examples", [])
+    if not isinstance(values, list):
+        return []
+    return [str(item).strip().lower() for item in values if str(item).strip()]
+
+
+def match_link_topics(item: dict[str, Any], link: dict[str, Any], canonical_url: str, topic_map: dict[str, Any]) -> list[dict[str, Any]]:
+    haystack = topic_candidate_text(item, link, canonical_url)
+    parsed = urllib.parse.urlsplit(canonical_url)
+    link_haystack = "\n".join([str(link.get("anchor_text") or ""), str(link.get("context") or ""), parsed.netloc, parsed.path]).lower()
+    matches: list[dict[str, Any]] = []
+    for index, topic in enumerate(topic_map.get("topics", [])):
+        if not isinstance(topic, dict):
+            continue
+        if any(term in haystack for term in topic_negative_terms(topic)):
+            continue
+        terms = topic_match_terms(topic)
+        matched = [term for term in terms if term in haystack]
+        if not matched:
+            continue
+        link_matched = [term for term in terms if term in link_haystack]
+        topic_id = str(topic.get("id") or topic.get("name") or f"topic_{index + 1}")
+        priority = str(topic.get("priority") or "normal")
+        matches.append({"id": topic_id, "name": str(topic.get("name") or topic_id), "priority": priority, "matched_keywords": matched[:8], "link_match_count": len(link_matched), "order": index})
+    return sorted(matches, key=lambda value: (topic_priority_value(value), int(value.get("order", 0)), value.get("name", "")))
+
+
+def build_link_triage(item: dict[str, Any], policy: dict[str, Any], topic_map: dict[str, Any] | None, remaining_budget: int) -> dict[str, Any]:
+    limits = policy.get("limits", {})
+    per_email_limit = int(limits.get("max_links_per_email", 2))
+    per_email_budget = min(per_email_limit, remaining_budget)
+    links = item.get("links", []) if isinstance(item.get("links"), list) else []
+    groups: list[dict[str, Any]] = []
+    canonical_seen: dict[str, int] = {}
+    hard_skipped = 0
+    deduped = 0
+    unmapped = 0
+    topic_map = topic_map or {}
+    topic_gate_active = any(isinstance(topic, dict) for topic in topic_map.get("topics", []))
+
+    for index, link in enumerate(links):
+        if not isinstance(link, dict):
+            continue
+        url = str(link.get("url") or "")
+        hard_reason = hard_skip_reason_for_url(url) or skip_reason_for_url(url, policy)
+        canonical = canonical_link_target(url)
+        if hard_reason:
+            link["policy_decision"] = "skip"
+            hard_skipped += 1
+            groups.append({"decision": "skip", "reason": hard_reason, "url": url, "canonical_url": canonical, "link_indexes": [index], "topics": [], "score": 0})
+            continue
+        if not canonical:
+            link["policy_decision"] = "skip"
+            hard_skipped += 1
+            groups.append({"decision": "skip", "reason": "hard_skip:invalid_url", "url": url, "canonical_url": "", "link_indexes": [index], "topics": [], "score": 0})
+            continue
+        if canonical in canonical_seen:
+            link["policy_decision"] = "dedupe"
+            deduped += 1
+            groups[canonical_seen[canonical]]["link_indexes"].append(index)
+            groups.append({"decision": "dedupe", "reason": "dedupe:canonical_target", "url": url, "canonical_url": canonical, "link_indexes": [index], "deduped_to": canonical_seen[canonical], "topics": [], "score": 0})
+            continue
+        canonical_seen[canonical] = len(groups)
+        topics = match_link_topics(item, link, canonical, topic_map) if topic_gate_active else []
+        if topic_gate_active and not topics:
+            link["policy_decision"] = "defer"
+            unmapped += 1
+            groups.append({"decision": "defer", "reason": "defer:unmapped_topic", "url": url, "canonical_url": canonical, "link_indexes": [index], "topics": [], "score": 0})
+            continue
+        priority_score = 0
+        if topics:
+            priority_score = {"high": 300, "medium": 200, "normal": 150, "low": 100}.get(str(topics[0].get("priority") or "normal"), 150)
+        link_match_score = sum(int(topic.get("link_match_count") or 0) for topic in topics) * 50
+        score = priority_score + link_match_score + max(0, 100 - index)
+        groups.append({"decision": "candidate", "reason": "topic_match" if topics else "topic_gate_inactive", "url": url, "canonical_url": canonical, "link_indexes": [index], "topics": topics, "score": score})
+
+    selected: list[int] = []
+    domain_counts: dict[str, int] = {}
+    candidates = [idx for idx, group in enumerate(groups) if group.get("decision") == "candidate"]
+    candidates.sort(key=lambda idx: (-int(groups[idx].get("score") or 0), idx))
+    for idx in candidates:
+        if len(selected) >= per_email_budget:
+            break
+        domain = urllib.parse.urlsplit(str(groups[idx].get("canonical_url") or "")).netloc.lower()
+        if domain_counts.get(domain, 0) >= 1 and len(candidates) - len(selected) > 1:
+            continue
+        selected.append(idx)
+        domain_counts[domain] = domain_counts.get(domain, 0) + 1
+    for idx in candidates:
+        group = groups[idx]
+        first_link_index = int(group.get("link_indexes", [0])[0])
+        link = links[first_link_index]
+        if idx in selected:
+            group["decision"] = "fetch"
+            group["reason"] = "fetch:topic_budget" if topic_gate_active else "fetch:budget"
+            link["policy_decision"] = "fetch"
+        else:
+            group["decision"] = "defer"
+            group["reason"] = "defer:budget"
+            link["policy_decision"] = "defer"
+
+    deferred = len([group for group in groups if group.get("decision") == "defer"])
+    if topic_gate_active and unmapped:
+        risks = set(item.get("risks", []))
+        risks.add("unmapped_alert_topic")
+        item["risks"] = sorted(risks)
+    return {
+        "total_links": len([link for link in links if isinstance(link, dict)]),
+        "hard_skipped_count": hard_skipped,
+        "candidate_group_count": len(candidates),
+        "selected_fetch_count": len(selected),
+        "deferred_count": deferred,
+        "deduped_count": deduped,
+        "unmapped_topic_count": unmapped,
+        "groups": groups,
+    }
+
+
 def link_evidence_payload(
     item: dict[str, Any],
     link: dict[str, Any],
@@ -884,74 +1112,85 @@ def enrich_item_links(
     *,
     remaining_budget: int,
     fetcher: Any = fetch_link_context,
+    topic_map: dict[str, Any] | None = None,
 ) -> int:
     item_policy = policy_for_type(str(item.get("email_type") or "unknown"), policy)
     limits = policy.get("limits", {})
-    per_email_limit = int(limits.get("max_links_per_email", 2))
     timeout = int(limits.get("timeout_seconds", 8))
     excerpt_chars = int(limits.get("excerpt_chars", LINK_EXCERPT_CHARS))
     fetched = 0
     ensure_email_snippet_evidence(item)
     normalize_existing_evidence(item)
-    evidence: list[dict[str, Any]] = [
-        existing
-        for existing in item.get("evidence", [])
-        if isinstance(existing, dict)
-    ]
+    evidence: list[dict[str, Any]] = [existing for existing in item.get("evidence", []) if isinstance(existing, dict)]
     existing_public_urls = public_link_evidence_urls(item)
     risks = set(item.get("risks", []))
+    triage = build_link_triage(item, policy, topic_map, remaining_budget)
+    item["link_triage"] = triage
+    risks.update(item.get("risks", []))
 
-    for link in item.get("links", []):
-        if not isinstance(link, dict):
-            continue
-        url = normalize_url(str(link.get("url") or ""))
-        if url and url in existing_public_urls:
-            continue
-        if fetched >= per_email_limit or fetched >= remaining_budget:
-            link["policy_decision"] = "skip"
-            evidence.append(link_evidence_payload(item, link, status="skipped", reason="link_budget_exhausted"))
-            if url:
-                existing_public_urls.add(url)
-            risks.add("link_budget_exhausted")
-            continue
-        if not item_policy.get("fetch_links", False):
-            link["policy_decision"] = "skip"
-            evidence.append(
-                link_evidence_payload(
-                    item,
-                    link,
-                    status="skipped",
-                    reason=f"policy_no_fetch:{item.get('email_type', 'unknown')}",
-                )
-            )
-            if url:
-                existing_public_urls.add(url)
-            risks.add("link_skipped")
-            continue
-        reason = skip_reason_for_url(str(link.get("url") or ""), policy)
-        if reason:
+    if not item_policy.get("fetch_links", False):
+        reason = f"policy_no_fetch:{item.get('email_type', 'unknown')}"
+        for group in item["link_triage"].get("groups", []):
+            if isinstance(group, dict) and group.get("decision") == "fetch":
+                group["decision"] = "skip"
+                group["reason"] = reason
+        for link in item.get("links", []):
+            if not isinstance(link, dict):
+                continue
+            url = normalize_url(str(link.get("url") or ""))
+            if url and url in existing_public_urls:
+                continue
             link["policy_decision"] = "skip"
             evidence.append(link_evidence_payload(item, link, status="skipped", reason=reason))
             if url:
                 existing_public_urls.add(url)
-            risks.add("tracking_skipped" if "track" in reason or "unsubscribe" in reason else "link_skipped")
-            continue
-        link["policy_decision"] = "fetch"
-        context = fetcher(str(link.get("url") or ""), timeout, excerpt_chars)
-        context.setdefault("uid", str(item.get("uid") or ""))
-        context.setdefault("anchor_text", link.get("anchor_text", ""))
-        context.setdefault("email_context", link.get("context", ""))
-        context.setdefault("source_content_type", link.get("source_content_type", ""))
-        evidence.append(link_evidence(context))
-        if url:
-            existing_public_urls.add(url)
-        fetched += 1
-        if context.get("status") == "fetched":
-            risks.discard("snippet_only")
-        elif context.get("status") == "failed":
-            risks.add("link_failed")
-        else:
             risks.add("link_skipped")
+        item["evidence"] = evidence
+        item["risks"] = sorted(risks)
+        item["link_triage"]["selected_fetch_count"] = 0
+        return 0
+
+    links = item.get("links", []) if isinstance(item.get("links"), list) else []
+    for group in triage.get("groups", []):
+        if not isinstance(group, dict):
+            continue
+        link_indexes = group.get("link_indexes", [])
+        if not isinstance(link_indexes, list) or not link_indexes:
+            continue
+        link_index = int(link_indexes[0])
+        if link_index < 0 or link_index >= len(links) or not isinstance(links[link_index], dict):
+            continue
+        link = links[link_index]
+        canonical_url = str(group.get("canonical_url") or "")
+        existing_key = normalize_url(canonical_url or str(link.get("url") or ""))
+        if existing_key and existing_key in existing_public_urls:
+            continue
+        decision = str(group.get("decision") or "")
+        reason = str(group.get("reason") or "")
+        if decision == "fetch":
+            context = fetcher(canonical_url, timeout, excerpt_chars)
+            context.setdefault("url", canonical_url)
+            context.setdefault("uid", str(item.get("uid") or ""))
+            context.setdefault("anchor_text", link.get("anchor_text", ""))
+            context.setdefault("email_context", link.get("context", ""))
+            context.setdefault("source_content_type", link.get("source_content_type", ""))
+            evidence.append(link_evidence(context))
+            if existing_key:
+                existing_public_urls.add(existing_key)
+            fetched += 1
+            if context.get("status") == "fetched":
+                risks.discard("snippet_only")
+            elif context.get("status") == "failed":
+                risks.add("link_failed")
+            else:
+                risks.add("link_skipped")
+        elif decision == "skip":
+            evidence.append(link_evidence_payload(item, link, status="skipped", reason=reason, final_url=canonical_url))
+            if existing_key:
+                existing_public_urls.add(existing_key)
+            risks.add("tracking_skipped" if "track" in reason or "unsubscribe" in reason else "link_skipped")
+        elif decision == "defer" and reason == "defer:budget":
+            risks.add("link_budget_exhausted")
 
     item["evidence"] = evidence
     item["risks"] = sorted(risks)
@@ -983,12 +1222,16 @@ def normalize_evidence_pack(scan: dict[str, Any], policy: dict[str, Any]) -> dic
     return scan
 
 
-def enrich_scan_links(scan: dict[str, Any], policy: dict[str, Any], fetcher: Any = fetch_link_context) -> dict[str, Any]:
+def enrich_scan_links(scan: dict[str, Any], policy: dict[str, Any], fetcher: Any = fetch_link_context, topic_map: dict[str, Any] | None = None) -> dict[str, Any]:
     limits = policy.get("limits", {})
     remaining = int(limits.get("max_links_total", 10))
     for item in scan.get("items", []):
         if remaining <= 0:
             if isinstance(item, dict):
+                item["link_triage"] = build_link_triage(item, policy, topic_map, 0)
+                for link in item.get("links", []) if isinstance(item.get("links"), list) else []:
+                    if isinstance(link, dict) and link.get("policy_decision") == "defer":
+                        link.pop("policy_decision", None)
                 skip_pending_links(item, "link_budget_exhausted")
             continue
         if has_link_evidence(item):
@@ -996,7 +1239,7 @@ def enrich_scan_links(scan: dict[str, Any], policy: dict[str, Any], fetcher: Any
             link_count = len(item.get("links", []) if isinstance(item.get("links"), list) else [])
             if existing_count >= link_count:
                 continue
-        used = enrich_item_links(item, policy, remaining_budget=remaining, fetcher=fetcher)
+        used = enrich_item_links(item, policy, remaining_budget=remaining, fetcher=fetcher, topic_map=topic_map)
         remaining -= used
     scan["status"] = "enriched"
     return scan

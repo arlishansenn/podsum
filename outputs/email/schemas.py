@@ -165,6 +165,7 @@ class EmailItem:
     body_part_count: int | None
     body_part_types: list[str] | None
     topics: list[dict[str, Any]] | None
+    link_triage: dict[str, Any] | None
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> EmailItem:
@@ -187,6 +188,7 @@ class EmailItem:
             body_part_count=_optional_int(data, "body_part_count"),
             body_part_types=_optional_string_list(data, "body_part_types"),
             topics=_optional_dict_list(data, "topics"),
+            link_triage=_dict_or_none(_optional(data, "link_triage"), "link_triage"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -207,6 +209,7 @@ class EmailItem:
         _put(output, "body_part_count", self.body_part_count)
         _put(output, "body_part_types", self.body_part_types)
         _put(output, "topics", self.topics)
+        _put(output, "link_triage", self.link_triage)
         return output
 
 
