@@ -31,7 +31,8 @@ Email Summary 能力。
     `--email-allow-imap-read`，否则命令只提醒，不访问邮箱。
 - 凭据来源：
   - 优先环境变量。
-  - 兼容 `~/.openclaw/.env`。
+  - 默认读取 Podsum 自己的 `~/Library/Application Support/Podsum/.env`。
+  - 不依赖 Hermes 或 OpenClaw 的环境变量。
   - 不提交账号、密码、app password 或旧脚本敏感信息。
 
 ## 真实 Fixture 策略

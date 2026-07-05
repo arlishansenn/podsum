@@ -486,8 +486,8 @@ def run_email_summary(args: argparse.Namespace) -> int:
     email_summary.normalize_args(args)
     try:
         scan_path, report_path, epub_path = email_summary.run(args)
-    except RuntimeError as exc:
-        log(f"Email summary failed: {exc}")
+    except Exception as exc:
+        log(f"Email summary failed: {email_summary.error_text(exc)}")
         return 1
     log(f"Wrote email scan: {scan_path}")
     log(f"Wrote email summary: {report_path}")

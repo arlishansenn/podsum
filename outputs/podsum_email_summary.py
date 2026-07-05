@@ -22,7 +22,7 @@ from podsum_core.delivery import run_hermes_prompt, send_hermes_file
 
 
 DEFAULT_OUTPUT_DIR = Path.home() / "Podcasts/AutoDownloads"
-DEFAULT_ENV_FILE = Path.home() / ".openclaw/.env"
+DEFAULT_ENV_FILE = Path.home() / "Library/Application Support/Podsum/.env"
 DEFAULT_PROMPT = Path(__file__).with_name("email_summary_prompt.md")
 DEFAULT_STATE_FILE = Path.home() / "Library/Application Support/Podsum/state.json"
 DEFAULT_HERMES = sender.DEFAULT_HERMES
@@ -38,6 +38,17 @@ SNIPPET_CHARS = 240
 
 def log(message: str) -> None:
     print(message, flush=True)
+
+
+def error_text(exc: BaseException) -> str:
+    if exc.args and isinstance(exc.args[0], bytes):
+        raw = exc.args[0]
+        for encoding in ("utf-8", "gb18030", "gbk"):
+            try:
+                return raw.decode(encoding).strip()
+            except UnicodeDecodeError:
+                continue
+    return str(exc).strip()
 
 
 def now_stamp() -> str:
@@ -62,11 +73,14 @@ def load_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-def env_value(env_file: dict[str, str], *names: str, default: str = "") -> str:
-    for name in names:
-        value = os.environ.get(name) or env_file.get(name)
+def config_value(env_file: dict[str, str], file_name: str, *env_names: str, default: str = "") -> str:
+    for name in (file_name, *env_names):
+        value = os.environ.get(name)
         if value:
             return value
+    value = env_file.get(file_name)
+    if value:
+        return value
     return default
 
 
@@ -144,15 +158,18 @@ def message_item(uid: str, raw_message: bytes) -> dict[str, Any]:
 
 def scan_imap(args: argparse.Namespace) -> dict[str, Any]:
     env_file = load_env_file(args.env_file)
-    host = args.imap_host or env_value(env_file, "PODSUM_EMAIL_IMAP_HOST", "IMAP_HOST", default=DEFAULT_IMAP_HOST)
-    port = args.imap_port or int(env_value(env_file, "PODSUM_EMAIL_IMAP_PORT", "IMAP_PORT", default=str(DEFAULT_IMAP_PORT)))
-    user = args.imap_user or env_value(env_file, "PODSUM_EMAIL_IMAP_USER", "IMAP_USER", "GMAIL_USER")
-    password = args.imap_pass or env_value(env_file, "PODSUM_EMAIL_IMAP_PASS", "IMAP_PASS", "GMAIL_APP_PASSWORD")
-    mailbox = args.mailbox or env_value(env_file, "PODSUM_EMAIL_IMAP_MAILBOX", "IMAP_MAILBOX", default=DEFAULT_MAILBOX)
-    tls_verify = parse_bool(env_value(env_file, "PODSUM_EMAIL_IMAP_TLS_VERIFY", "IMAP_REJECT_UNAUTHORIZED", default="true"), True)
+    host = args.imap_host or config_value(env_file, "PODSUM_EMAIL_IMAP_HOST", "IMAP_HOST", default=DEFAULT_IMAP_HOST)
+    port = args.imap_port or int(config_value(env_file, "PODSUM_EMAIL_IMAP_PORT", "IMAP_PORT", default=str(DEFAULT_IMAP_PORT)))
+    user = args.imap_user or config_value(env_file, "PODSUM_EMAIL_IMAP_USER", "IMAP_USER", "GMAIL_USER")
+    password = args.imap_pass or config_value(env_file, "PODSUM_EMAIL_IMAP_PASS", "IMAP_PASS", "GMAIL_APP_PASSWORD")
+    mailbox = args.mailbox or config_value(env_file, "PODSUM_EMAIL_IMAP_MAILBOX", "IMAP_MAILBOX", default=DEFAULT_MAILBOX)
+    tls_verify = parse_bool(config_value(env_file, "PODSUM_EMAIL_IMAP_TLS_VERIFY", "IMAP_REJECT_UNAUTHORIZED", default="true"), True)
 
     if not user or not password:
-        raise RuntimeError("missing IMAP credentials: set PODSUM_EMAIL_IMAP_USER/PODSUM_EMAIL_IMAP_PASS or IMAP_USER/IMAP_PASS")
+        raise RuntimeError(
+            "missing IMAP credentials: set PODSUM_EMAIL_IMAP_USER/"
+            f"PODSUM_EMAIL_IMAP_PASS in {args.env_file}"
+        )
 
     context = ssl.create_default_context()
     if not tls_verify:
@@ -369,8 +386,8 @@ def main() -> int:
     normalize_args(args)
     try:
         scan_path, report_path, epub_path = run(args)
-    except RuntimeError as exc:
-        log(f"Email summary failed: {exc}")
+    except Exception as exc:
+        log(f"Email summary failed: {error_text(exc)}")
         return 1
     log(f"Wrote email scan: {scan_path}")
     log(f"Wrote email summary: {report_path}")

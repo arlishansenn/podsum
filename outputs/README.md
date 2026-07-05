@@ -170,17 +170,34 @@ For the integrated runner, use:
 /usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" run-once --cleanup --email-summary --email-allow-imap-read
 ```
 
-Email credentials are read from environment variables first, then
-`~/.openclaw/.env`. Supported names:
+Email credentials are read from environment variables first, then Podsum's own
+env file:
 
 ```text
-PODSUM_EMAIL_IMAP_HOST or IMAP_HOST
-PODSUM_EMAIL_IMAP_PORT or IMAP_PORT
-PODSUM_EMAIL_IMAP_USER or IMAP_USER or GMAIL_USER
-PODSUM_EMAIL_IMAP_PASS or IMAP_PASS or GMAIL_APP_PASSWORD
-PODSUM_EMAIL_IMAP_MAILBOX or IMAP_MAILBOX
-PODSUM_EMAIL_IMAP_TLS_VERIFY or IMAP_REJECT_UNAUTHORIZED
+~/Library/Application Support/Podsum/.env
 ```
+
+Create it from the checked-in template:
+
+```sh
+mkdir -p "$HOME/Library/Application Support/Podsum"
+cp "/Users/admin/Library/Application Support/Podsum/outputs/podsum.env.example" "$HOME/Library/Application Support/Podsum/.env"
+chmod 600 "$HOME/Library/Application Support/Podsum/.env"
+```
+
+Supported names:
+
+```text
+PODSUM_EMAIL_IMAP_HOST
+PODSUM_EMAIL_IMAP_PORT
+PODSUM_EMAIL_IMAP_USER
+PODSUM_EMAIL_IMAP_PASS
+PODSUM_EMAIL_IMAP_MAILBOX
+PODSUM_EMAIL_IMAP_TLS_VERIFY
+```
+
+Legacy `IMAP_*` environment names are accepted only as explicit process
+environment overrides, not as a reason to depend on Hermes or OpenClaw config.
 
 For migration testing without touching Gmail/IMAP:
 

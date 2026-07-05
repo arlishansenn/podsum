@@ -143,14 +143,17 @@ def raw_messages_from_dir(input_dir: Path) -> list[bytes]:
 
 def fetch_raw_messages(args: argparse.Namespace) -> list[bytes]:
     env_file = email_summary.load_env_file(args.env_file)
-    host = args.imap_host or email_summary.env_value(env_file, "PODSUM_EMAIL_IMAP_HOST", "IMAP_HOST", default=email_summary.DEFAULT_IMAP_HOST)
-    port = args.imap_port or int(email_summary.env_value(env_file, "PODSUM_EMAIL_IMAP_PORT", "IMAP_PORT", default=str(email_summary.DEFAULT_IMAP_PORT)))
-    user = args.imap_user or email_summary.env_value(env_file, "PODSUM_EMAIL_IMAP_USER", "IMAP_USER", "GMAIL_USER")
-    password = args.imap_pass or email_summary.env_value(env_file, "PODSUM_EMAIL_IMAP_PASS", "IMAP_PASS", "GMAIL_APP_PASSWORD")
-    mailbox = args.mailbox or email_summary.env_value(env_file, "PODSUM_EMAIL_IMAP_MAILBOX", "IMAP_MAILBOX", default=email_summary.DEFAULT_MAILBOX)
-    tls_verify = email_summary.parse_bool(email_summary.env_value(env_file, "PODSUM_EMAIL_IMAP_TLS_VERIFY", "IMAP_REJECT_UNAUTHORIZED", default="true"), True)
+    host = args.imap_host or email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_HOST", "IMAP_HOST", default=email_summary.DEFAULT_IMAP_HOST)
+    port = args.imap_port or int(email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_PORT", "IMAP_PORT", default=str(email_summary.DEFAULT_IMAP_PORT)))
+    user = args.imap_user or email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_USER", "IMAP_USER", "GMAIL_USER")
+    password = args.imap_pass or email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_PASS", "IMAP_PASS", "GMAIL_APP_PASSWORD")
+    mailbox = args.mailbox or email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_MAILBOX", "IMAP_MAILBOX", default=email_summary.DEFAULT_MAILBOX)
+    tls_verify = email_summary.parse_bool(email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_TLS_VERIFY", "IMAP_REJECT_UNAUTHORIZED", default="true"), True)
     if not user or not password:
-        raise RuntimeError("missing IMAP credentials: set PODSUM_EMAIL_IMAP_USER/PODSUM_EMAIL_IMAP_PASS or IMAP_USER/IMAP_PASS")
+        raise RuntimeError(
+            "missing IMAP credentials: set PODSUM_EMAIL_IMAP_USER/"
+            f"PODSUM_EMAIL_IMAP_PASS in {args.env_file}"
+        )
 
     context = ssl.create_default_context()
     if not tls_verify:
@@ -250,8 +253,8 @@ def main() -> int:
     normalize_args(args)
     try:
         return int(args.func(args))
-    except RuntimeError as exc:
-        print(f"Email fixture tool failed: {exc}")
+    except Exception as exc:
+        print(f"Email fixture tool failed: {email_summary.error_text(exc)}")
         return 1
 
 

@@ -523,6 +523,12 @@ class PodsumCliTest(unittest.TestCase):
     def test_email_summary_missing_credentials_fails_after_imap_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
+            legacy_env_file = tmp_path / "legacy.env"
+            legacy_env_file.write_text(
+                "IMAP_USER=legacy@example.invalid\n"
+                "IMAP_PASS=legacy-password\n",
+                encoding="utf-8",
+            )
             env = os.environ.copy()
             for key in [
                 "PODSUM_EMAIL_IMAP_HOST",
@@ -545,14 +551,16 @@ class PodsumCliTest(unittest.TestCase):
                 "--output",
                 str(tmp_path / "downloads"),
                 "--env-file",
-                str(tmp_path / "missing.env"),
+                str(legacy_env_file),
                 "--allow-imap-read",
                 "--no-send",
                 env=env,
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("missing IMAP credentials", result.stderr + result.stdout)
+            output = result.stderr + result.stdout
+            self.assertIn("missing IMAP credentials", output)
+            self.assertIn("PODSUM_EMAIL_IMAP_USER/PODSUM_EMAIL_IMAP_PASS", output)
             self.assertFalse((tmp_path / "downloads" / "EmailReports").exists())
 
     def test_run_once_can_exercise_email_summary_from_eml_dir(self) -> None:
