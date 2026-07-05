@@ -547,10 +547,22 @@ INDEX_HTML = """<!doctype html>
   </header>
   <main class="shell">
     <nav class="nav">
+      <button class="nav-button" data-view="policy">EmailPolicyPanel</button>
       <button class="nav-button active" data-view="evidence">EmailEvidencePack</button>
       <button class="nav-button" data-view="brief">EmailIntelBrief</button>
     </nav>
     <section class="workspace">
+      <section id="policyView" class="view">
+        <div class="section-head">
+          <h2>EmailPolicyPanel</h2>
+          <button id="savePolicy">Save policy</button>
+        </div>
+        <p class="notice">核心可视化工作对象：控制邮件分类、链接补全和 evidence 生成边界。修改 policy 只影响后续 scan/enrich，不会自动重跑。</p>
+        <div id="policySummary" class="policy-summary"></div>
+        <label class="field-label" for="policyEditor">EmailPolicy spec</label>
+        <textarea id="policyEditor" spellcheck="false"></textarea>
+        <div id="policyStatus" class="notice"></div>
+      </section>
       <section id="evidenceView" class="view active">
         <div class="section-head">
           <h2>EmailEvidencePack</h2>
@@ -588,13 +600,6 @@ INDEX_HTML = """<!doctype html>
       </section>
     </section>
     <aside class="side">
-      <section class="panel">
-        <h3>EmailPolicyPanel</h3>
-        <p class="hint">修改 policy 只影响后续 scan/enrich，不会自动重跑。</p>
-        <textarea id="policyEditor" spellcheck="false"></textarea>
-        <button id="savePolicy">Save policy</button>
-        <div id="policyStatus" class="notice"></div>
-      </section>
       <section class="panel">
         <h3>ReviewChecklistPanel</h3>
         <div id="checklist"></div>
@@ -712,18 +717,19 @@ p { margin: 0; }
 .pill.warn, .badge.warn { border-color: #f2c078; color: var(--warn); }
 .pill.bad, .badge.bad { border-color: #f4a29b; color: var(--bad); }
 .pill.good, .badge.good { border-color: #9bd4b5; color: var(--good); }
-.stats {
+.stats, .policy-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px;
   margin-bottom: 12px;
 }
-.stat, .panel, .detail, .email-row, .brief-rendered {
+.stat, .panel, .detail, .email-row, .brief-rendered, .policy-card {
   background: var(--panel);
   border: 1px solid var(--line);
 }
-.stat { padding: 10px; }
+.stat, .policy-card { padding: 10px; }
 .stat strong { display: block; font-size: 18px; }
+.policy-card strong { display: block; margin-bottom: 6px; }
 .evidence-grid, .brief-grid {
   display: grid;
   grid-template-columns: minmax(260px, 38%) 1fr;
@@ -769,7 +775,7 @@ textarea {
   padding: 8px;
   background: #fff;
 }
-#policyEditor { min-height: 260px; }
+#policyEditor { min-height: 440px; }
 #briefEditor { min-height: 360px; }
 .brief-rendered {
   min-height: 360px;
@@ -1010,6 +1016,27 @@ function renderPolicy() {
   document.getElementById("policyStatus").textContent = state.policy?.error
     ? `Policy parse error: ${state.policy.error}`
     : `Policy loaded from ${state.policy?.path || ""}`;
+  renderPolicySummary();
+}
+
+function renderPolicySummary() {
+  const policy = state.policy?.policy;
+  const target = document.getElementById("policySummary");
+  if (!policy) {
+    target.innerHTML = `<div class="policy-card">${badge("invalid", "bad")} Policy JSON cannot be parsed.</div>`;
+    return;
+  }
+  const limits = policy.limits || {};
+  const types = policy.email_types || [];
+  const fetchTypes = types.filter((item) => item.fetch_links).map((item) => item.name);
+  const noFetchTypes = types.filter((item) => !item.fetch_links).map((item) => item.name);
+  target.innerHTML = [
+    `<div class="policy-card"><strong>link budget</strong><p>per email: ${escapeHtml(limits.max_links_per_email ?? "")}</p><p>total: ${escapeHtml(limits.max_links_total ?? "")}</p><p>timeout: ${escapeHtml(limits.timeout_seconds ?? "")}s</p></div>`,
+    `<div class="policy-card"><strong>fetch links</strong>${fetchTypes.map((name) => badge(name, "good")).join(" ") || badge("none", "warn")}</div>`,
+    `<div class="policy-card"><strong>snippet only</strong>${noFetchTypes.map((name) => badge(name)).join(" ") || badge("none", "warn")}</div>`,
+    `<div class="policy-card"><strong>skip patterns</strong><p>${escapeHtml((policy.skip_url_patterns || []).join(", "))}</p></div>`,
+    `<div class="policy-card"><strong>email types</strong><p>${escapeHtml(types.map((item) => item.name).join(", "))}</p></div>`,
+  ].join("");
 }
 
 function renderChecklist() {
@@ -1041,6 +1068,7 @@ function showView(view) {
     button.classList.toggle("active", button.dataset.view === view);
   }
   document.getElementById("evidenceView").classList.toggle("active", view === "evidence");
+  document.getElementById("policyView").classList.toggle("active", view === "policy");
   document.getElementById("briefView").classList.toggle("active", view === "brief");
 }
 

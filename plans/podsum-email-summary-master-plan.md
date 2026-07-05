@@ -7,21 +7,21 @@ Podsum Email Summary 的主线是：先把邮件作为 Podcast 之外的第二�
 总目标分三层：
 
 1. Email Summary 后台能力：扫描邮件，生成 `EmailEvidencePack`，生成 Hermes 摘要和 EPUB artifact。
-2. VIS 对象模型：固定两个核心可视化工作对象和两个附属面板。
+2. VIS 对象模型：固定三个核心可视化工作对象和一个质量门禁面板。
 3. 本地 GUI Workbench：Podsum 提供手动启动的 localhost Web server，用来审核已有 artifact，不读 IMAP、不调用 Hermes、不发送、不接 launchd。
 
 后续 README 和实施以本文档为准。旧的阶段性计划可以保留为历史记录。
 
 ## Object Model
 
-核心可视化工作对象只有两个：
+核心可视化工作对象有三个：
 
+- `EmailPolicyPanel`：邮件证据策略台，对应 `outputs/email_link_policy.md`。用户需要看见和调整它，才能控制邮件分类、链接补全、跳过规则和 evidence 生成边界。
 - `EmailEvidencePack`：邮件证据包，对应 `EmailReports/email-scan-YYYY-MM-DD.json`。用户需要看见、筛选、标注、锁定它，才能控制下游 Brief 的生成质量。每封邮件至少包含一条 `type=email_snippet` 的邮件自身 evidence；`type=public_link` 的 evidence 只在链接补全时追加。
 - `EmailIntelBrief`：邮件情报简报，对应 `EmailReports/email-summary-YYYY-MM-DD.md`。用户需要审核、编辑、确认和批准它，才能进入 EPUB 或发送阶段。
 
-附属面板有两个：
+附属面板有一个：
 
-- `EmailPolicyPanel`：策略配置面板，背后文件是 `outputs/email_link_policy.md`。它编辑声明式 `EmailPolicy` spec，但 `EmailPolicy` 本身不是核心可视化工作对象。
 - `ReviewChecklistPanel`：质量门禁面板，背后逻辑来自 checklist 校验。它是 `EmailIntelBrief` 的审核视图，不升级为核心工作对象。
 
 GUI 人工审核状态写入 sidecar：
@@ -34,7 +34,7 @@ sidecar 只保存人工标注、Brief 状态和 override，不覆盖 scan JSON �
 
 ```mermaid
 flowchart LR
-  P["EmailPolicyPanel<br/>附属面板：策略配置"] -. "读取/编辑 EmailPolicy spec" .-> E["EmailEvidencePack<br/>核心对象：邮件证据包"]
+  P["EmailPolicyPanel<br/>核心对象：邮件证据策略台"] --> E["EmailEvidencePack<br/>核心对象：邮件证据包"]
   E --> B["EmailIntelBrief<br/>核心对象：邮件情报简报"]
   B --> R["ReviewChecklistPanel<br/>附属面板：质量门禁"]
   R --> X["EPUB / Delivery<br/>人工批准后的下游动作"]
@@ -55,7 +55,8 @@ flowchart LR
 - 真实 IMAP 必须显式 `--allow-imap-read`
 - 默认不抓网页，不发送，不修改邮箱状态，不接 launchd
 
-文档措辞统一为：`EmailPolicy` 是声明式 Spec/config，不是核心可视化工作对象。
+文档措辞统一为：`EmailPolicyPanel` 是核心可视化工作对象，`EmailPolicy`
+是它编辑和保存的声明式 Spec/config。
 
 ### Phase 2：定义 VIS GUI 规格
 
@@ -92,9 +93,9 @@ plans/podsum-email-workbench-gui-spec.md
 
 Workbench 采用单页审核台：
 
-- 左侧对象导航：`EmailEvidencePack`、`EmailIntelBrief`。
+- 左侧对象导航：`EmailPolicyPanel`、`EmailEvidencePack`、`EmailIntelBrief`。
 - 中间主工作区：当前核心对象。
-- 右侧附属面板：`EmailPolicyPanel`、`ReviewChecklistPanel`、命令预览。
+- 右侧附属面板：`ReviewChecklistPanel`、命令预览。
 - 底部或顶部状态区：日期、账号、artifact 缺失状态、server mode。
 
 用户操作只更新 review sidecar 或 policy 文件。重新扫描、链接补全、Hermes 摘要、发送，都只给出可复制 CLI 命令，不自动执行。

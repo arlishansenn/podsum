@@ -2,7 +2,7 @@
 
 ## Summary
 
-Email Workbench 是 Podsum 的本地手动审核台。它读取已有 Email Summary artifact，把两个核心可视化工作对象呈现给用户，并通过两个附属面板提供策略调整和质量门禁。
+Email Workbench 是 Podsum 的本地手动审核台。它读取已有 Email Summary artifact，把三个核心可视化工作对象呈现给用户，并通过质量门禁面板控制导出。
 
 它不是新的后台 runner，不自动读 IMAP，不自动调用 Hermes，不自动发送。
 
@@ -34,13 +34,13 @@ ssh -L 8765:127.0.0.1:8765 macmini
 
 ```mermaid
 flowchart LR
-  P["EmailPolicyPanel<br/>策略配置面板"] -. "读取/保存 EmailPolicy spec" .-> E["EmailEvidencePack<br/>核心对象"]
+  P["EmailPolicyPanel<br/>核心对象：邮件证据策略台"] --> E["EmailEvidencePack<br/>核心对象"]
   E --> B["EmailIntelBrief<br/>核心对象"]
   B --> R["ReviewChecklistPanel<br/>质量门禁面板"]
   R --> X["EPUB / Delivery<br/>人工批准后的动作"]
 ```
 
-`EmailPolicyPanel` 和 `ReviewChecklistPanel` 是附属面板，不进入核心对象导航。
+`EmailPolicyPanel` 进入核心对象导航；`ReviewChecklistPanel` 是附属门禁面板。
 
 ## Layout
 
@@ -49,6 +49,7 @@ flowchart LR
 | Date / account / artifact status / local server mode               |
 +----------------------+---------------------------------------------+
 | Core object nav      | Main work area                              |
+| - PolicyPanel        | - PolicyPanel view                          |
 | - EvidencePack       | - EvidencePack view                         |
 | - IntelBrief         | - IntelBrief view                           |
 +----------------------+----------------------+----------------------+
@@ -56,7 +57,7 @@ flowchart LR
 +--------------------------------------------+----------------------+
 ```
 
-第一版用单页 HTML/CSS/JS 实现。左侧只导航两个核心对象；右侧面板随时可见。
+第一版用单页 HTML/CSS/JS 实现。左侧导航三个核心对象；右侧只保留 ReviewChecklistPanel 和命令预览。
 
 ## EmailEvidencePack View
 
@@ -131,6 +132,7 @@ outputs/email_link_policy.md
 - 编辑 email type 规则、`fetch_links`、skip patterns、limits。
 - 保存前校验 JSON。
 - 保存失败时不覆盖原文件。
+- 以可视化摘要展示 link budget、允许抓取的类型、snippet-only 类型和跳过规则，避免 EvidencePack 把所有 evidence 堆在一起。
 
 提示语必须说明：修改 policy 只影响后续 scan/enrich，不会自动重跑。
 

@@ -233,11 +233,11 @@ Email summary is moving toward a compact VIS-style Workbench model:
 EmailPolicyPanel -> EmailEvidencePack -> EmailIntelBrief -> ReviewChecklistPanel -> EPUB / Delivery
 ```
 
-- `EmailEvidencePack` and `EmailIntelBrief` are the two core visual work
-  objects.
-- `EmailPolicyPanel` edits the declarative policy spec at
-  `outputs/email_link_policy.md`. `EmailPolicy` is configuration, not a core
-  visual work object.
+- `EmailPolicyPanel`, `EmailEvidencePack` and `EmailIntelBrief` are the three
+  core visual work objects.
+- `EmailPolicyPanel` edits and visualizes the declarative policy spec at
+  `outputs/email_link_policy.md`. It controls classification, link enrichment,
+  skip rules and evidence boundaries before evidence is generated.
 - `ReviewChecklistPanel` is the quality gate view inside the Brief review flow,
   not a separate core visual work object.
 - `EmailEvidencePack` is still written as

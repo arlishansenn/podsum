@@ -53,6 +53,11 @@ def get_json(base_url: str, path: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def get_text(base_url: str, path: str) -> str:
+    with urllib.request.urlopen(f"{base_url}{path}", timeout=5) as response:
+        return response.read().decode("utf-8")
+
+
 def post_json(base_url: str, path: str, payload: dict) -> dict:
     request = urllib.request.Request(
         f"{base_url}{path}",
@@ -135,12 +140,15 @@ class PodsumCliTest(unittest.TestCase):
             )
             server, thread, base_url = start_workbench(config)
             try:
+                home = get_text(base_url, "/")
                 context = get_json(base_url, "/api/context")
                 evidence = get_json(base_url, "/api/evidence-pack")
                 commands = get_json(base_url, "/api/commands")
             finally:
                 stop_workbench(server, thread)
 
+            self.assertIn('data-view="policy"', home)
+            self.assertIn("EmailPolicyPanel", home)
             self.assertEqual(context["server"]["mode"], "manual-local-workbench")
             self.assertFalse(context["server"]["safe_defaults"]["reads_imap"])
             self.assertIn("scan", context["missing"])

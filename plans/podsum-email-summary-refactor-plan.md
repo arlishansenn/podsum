@@ -37,18 +37,18 @@ Email Summary 能力。
 
 ## VIS 对象边界
 
-Email Summary 只保留两个核心可视化工作对象。另有一个声明式配置
-Spec 和一个质量门禁视图：
+Email Summary 保留三个核心可视化工作对象。另有一个质量门禁视图：
 
+- `EmailPolicyPanel`：邮件证据策略台。物理文件为
+  `outputs/email_link_policy.md`，用声明式策略决定邮件类型、链接抓取和
+  跳过规则。它必须暴露给用户可视化操作，因为它直接控制 EvidencePack
+  里 evidence 如何产生和分层。
 - `EmailEvidencePack`：邮件证据包。物理文件继续使用
   `EmailReports/email-scan-YYYY-MM-DD.json`，内部包含 scan metadata、
   email items、links、evidence、risks。
 - `EmailIntelBrief`：邮件情报简报。物理文件继续使用
   `EmailReports/email-summary-YYYY-MM-DD.md`，内部包含 key takeaway、
   需要处理、值得知道、可以忽略、三件事、来源索引和 Review Checklist。
-- `EmailPolicy`：邮件类型与链接补全策略 Spec。物理文件为
-  `outputs/email_link_policy.md`，用声明式策略决定邮件类型、链接抓取和
-  跳过规则。它通过 `EmailPolicyPanel` 编辑，但不是核心可视化工作对象。
 
 `EmailItem`、`LinkCandidate`、`LinkEvidence`、`SkippedLink` 都是
 `EmailEvidencePack` 的内部字段，不作为独立核心可视化工作对象。
