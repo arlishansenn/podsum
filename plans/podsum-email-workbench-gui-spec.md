@@ -136,7 +136,9 @@ EmailReports/email-summary-YYYY-MM-DD.md
 
 展示内容：
 
+- EmailIntelBrief 对象版本、来源类型和当前 review 状态。
 - Markdown 渲染视图。
+- Brief section 摘要：section 数量、来源覆盖率、来源索引条数、coverage 是否完整。
 - 原始 Markdown 文本区。
 - 来源索引解析结果。
 - 当前 brief 状态：`draft`、`needs_revision`、`approved`。
@@ -150,6 +152,13 @@ EmailReports/email-summary-YYYY-MM-DD.md
 - 点击 UID 回到 EvidencePack 对应邮件。
 
 第一版不覆盖原始 summary Markdown；人工编辑内容只写入 sidecar 的 `brief_override_markdown`。
+
+EvidencePack 到 EmailIntelBrief 的 0.1 生成规则：
+
+- dry-run 或 Hermes 失败时仍生成可审核 draft，而不是只写失败信息。
+- draft 必须包含 key takeaway、需要处理、值得知道、可以忽略、如果只记三件事和来源索引。
+- snippet-only、link skipped、truncated window 等证据边界必须进入 brief。
+- Workbench 计算 source coverage；缺 UID 来源会使 checklist 或审核状态不可批准。
 
 ## ReviewChecklistPanel
 

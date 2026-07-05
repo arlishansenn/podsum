@@ -41,6 +41,7 @@ DEFAULT_RECENT_DAYS = 1
 DEFAULT_LIMIT = 300
 DEFAULT_FIXTURE_ACCOUNT = "fixture@example.invalid"
 EVIDENCE_PACK_VERSION = "0.1"
+INTEL_BRIEF_VERSION = "0.1"
 SNIPPET_CHARS = 240
 LINK_EXCERPT_CHARS = 1200
 FETCH_BODY_CHARS = 4000
@@ -1013,6 +1014,212 @@ def fallback_report(scan: dict[str, Any], reason: str) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def source_index_line(scan: dict[str, Any], item: dict[str, Any]) -> str:
+    return (
+        f"- UID={item.get('uid')} | From={item.get('from')} | "
+        f"Subject={item.get('subject')} | Date={item.get('date')} | "
+        f"`email://{scan['date']}/{item.get('uid')}`"
+    )
+
+
+def fetched_public_link_evidence(item: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        evidence
+        for evidence in item.get("evidence", [])
+        if isinstance(evidence, dict)
+        and evidence.get("type") == "public_link"
+        and evidence.get("status") == "fetched"
+    ]
+
+
+def evidence_excerpt(item: dict[str, Any], limit: int = 180) -> str:
+    fetched_links = fetched_public_link_evidence(item)
+    if fetched_links:
+        evidence = fetched_links[0]
+        parts = [str(evidence.get("title") or ""), str(evidence.get("excerpt") or "")]
+        return clean_text(" | ".join(part for part in parts if part), limit)
+    for evidence in item.get("evidence", []):
+        if isinstance(evidence, dict) and evidence.get("type") == "email_snippet":
+            return clean_text(str(evidence.get("excerpt") or ""), limit)
+    return clean_text(str(item.get("snippet") or ""), limit)
+
+
+def evidence_gap_text(item: dict[str, Any]) -> str:
+    risks = set(item.get("risks", []))
+    gaps: list[str] = []
+    if "snippet_only" in risks:
+        gaps.append("仅基于邮件摘要")
+    if "metadata_only" in risks:
+        gaps.append("仅基于邮件元数据")
+    if "link_failed" in risks:
+        gaps.append("链接抓取失败")
+    if "tracking_skipped" in risks:
+        gaps.append("tracking/unsubscribe 类链接已跳过")
+    if "link_skipped" in risks:
+        gaps.append("链接未抓取或被策略跳过")
+    if "link_budget_exhausted" in risks:
+        gaps.append("链接抓取预算耗尽")
+    if item.get("links") and not fetched_public_link_evidence(item):
+        gaps.append("待外部验证")
+    return "；".join(dict.fromkeys(gaps)) or "无明显证据缺口"
+
+
+def item_brief_block(scan: dict[str, Any], item: dict[str, Any], *, conclusion: str, action: str) -> list[str]:
+    excerpt = evidence_excerpt(item)
+    return [
+        f"- 结论：{conclusion}",
+        f"  - 依据：{excerpt or '没有可用正文片段'}（{evidence_gap_text(item)}）",
+        f"  - 建议动作：{action}",
+        f"  - 来源：UID={item.get('uid')} / From={item.get('from')} / "
+        f"Subject={item.get('subject')} / Date={item.get('date')} / "
+        f"`email://{scan['date']}/{item.get('uid')}`",
+    ]
+
+
+def classify_brief_items(scan: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    need_action: list[dict[str, Any]] = []
+    worth_knowing: list[dict[str, Any]] = []
+    ignore: list[dict[str, Any]] = []
+    for item in scan.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        email_type = str(item.get("email_type") or "unknown")
+        risks = set(item.get("risks", []))
+        has_links = bool(item.get("links"))
+        if email_type in {"personal", "transactional"} or item.get("has_attachments"):
+            need_action.append(item)
+        elif email_type in {"google_alert", "newsletter_article", "digest"} or fetched_public_link_evidence(item) or has_links:
+            worth_knowing.append(item)
+        elif "metadata_only" in risks:
+            ignore.append(item)
+        else:
+            ignore.append(item)
+    return need_action, worth_knowing, ignore
+
+
+def brief_type_distribution(scan: dict[str, Any]) -> str:
+    counts: dict[str, int] = {}
+    for item in scan.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("email_type") or "unknown")
+        counts[key] = counts.get(key, 0) + 1
+    return "，".join(f"{key} {value} 封" for key, value in sorted(counts.items())) or "无邮件"
+
+
+def build_intel_brief_draft(scan: dict[str, Any], reason: str = "") -> str:
+    items = [item for item in scan.get("items", []) if isinstance(item, dict)]
+    need_action, worth_knowing, ignore = classify_brief_items(scan)
+    link_count = sum(len(item.get("links", []) if isinstance(item.get("links"), list) else []) for item in items)
+    fetched_count = sum(len(fetched_public_link_evidence(item)) for item in items)
+    lines = [
+        f"# Podsum Email Summary {scan['date']}",
+        "",
+        f"生成时间: {now_stamp()}",
+        f"账号: {scan.get('account', '')}",
+        f"扫描窗口: {scan.get('window', '')}",
+        f"原始邮件数: {scan.get('raw_count', 0)}",
+        f"对象: EmailIntelBrief",
+        f"版本: {INTEL_BRIEF_VERSION}",
+        f"来源对象: EmailEvidencePack {scan.get('object_version', '')}",
+        "",
+        "## key takeaway",
+        "",
+    ]
+    if scan.get("possibly_truncated"):
+        lines.extend(["触达上限，可能有遗漏。", ""])
+    if not items:
+        lines.extend(["本次 EvidencePack 没有邮件条目。", ""])
+    else:
+        lines.extend(
+            [
+                f"本次 EvidencePack 含 {len(items)} 封邮件，类型分布：{brief_type_distribution(scan)}。",
+                f"邮件中共发现 {link_count} 个链接候选，已取得公开网页 evidence {fetched_count} 条；没有公开网页 evidence 的判断均标注为仅基于邮件摘要或待外部验证。",
+                "",
+            ]
+        )
+    if reason:
+        lines.extend(["## 生成说明", "", reason, ""])
+
+    lines.extend(["## 需要处理", ""])
+    if need_action:
+        for item in need_action:
+            lines.extend(
+                item_brief_block(
+                    scan,
+                    item,
+                    conclusion="这封邮件可能需要人工确认或后续动作。",
+                    action="打开来源邮件核对完整正文，再决定回复、归档或转交。",
+                )
+            )
+    else:
+        lines.append("今天没有明确需要处理的邮件。")
+
+    lines.extend(["", "## 值得知道", ""])
+    if worth_knowing:
+        for item in worth_knowing:
+            lines.extend(
+                item_brief_block(
+                    scan,
+                    item,
+                    conclusion="这封邮件包含值得记录或后续阅读的线索。",
+                    action="优先查看邮件里的原始链接；当前结论待外部验证。",
+                )
+            )
+    else:
+        lines.append("今天没有明显值得单独记录的邮件线索。")
+
+    lines.extend(["", "## 可以忽略", ""])
+    if ignore:
+        ignored_types = brief_type_distribution({"items": ignore})
+        lines.append(f"可暂时忽略 {len(ignore)} 封，主要类型：{ignored_types}。忽略依据：没有明确行动信号，或当前只有低信号摘要。")
+        for item in ignore[:8]:
+            lines.append(f"- UID={item.get('uid')} | Subject={item.get('subject')} | 原因：{evidence_gap_text(item)}")
+        if len(ignore) > 8:
+            lines.append(f"- 其余 {len(ignore) - 8} 封只保留在来源索引中。")
+    else:
+        lines.append("没有需要合并忽略的邮件。")
+
+    top_items = (need_action + worth_knowing)[:3]
+    lines.extend(["", "## 如果只记三件事", ""])
+    if top_items:
+        for item in top_items:
+            lines.append(
+                f"- UID={item.get('uid')}：{clean_text(str(item.get('subject') or ''), 80)}；"
+                f"{evidence_gap_text(item)}。"
+            )
+    else:
+        lines.append("没有足够证据支持三条结论。")
+
+    lines.extend(["", "## 来源索引", ""])
+    for item in items:
+        lines.append(source_index_line(scan, item))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def has_source_index(markdown: str) -> bool:
+    return "来源索引" in markdown or "source" in markdown.lower()
+
+
+def ensure_intel_brief_traceability(markdown: str, scan: dict[str, Any]) -> str:
+    text = markdown.rstrip()
+    additions: list[str] = []
+    if scan.get("possibly_truncated") and "触达上限" not in text and "可能有遗漏" not in text:
+        additions.extend(["## 证据边界", "", "触达上限，可能有遗漏。", ""])
+    if "snippet_only" in json.dumps(scan, ensure_ascii=False) and "仅基于邮件摘要" not in text and "待外部验证" not in text:
+        if "## 证据边界" not in "\n".join(additions):
+            additions.extend(["## 证据边界", ""])
+        additions.extend(["- 存在 snippet_only 风险；未补全公开网页 evidence 的判断仅基于邮件摘要或待外部验证。", ""])
+    if not has_source_index(text):
+        additions.extend(["## 来源索引", ""])
+        for item in scan.get("items", []):
+            if isinstance(item, dict):
+                additions.append(source_index_line(scan, item))
+    if additions:
+        text = text + "\n\n" + "\n".join(additions).rstrip()
+    return text.rstrip() + "\n"
+
+
 def render_report(args: argparse.Namespace, scan: dict[str, Any]) -> str:
     scan_json = json.dumps(scan, ensure_ascii=False, indent=2)
     prompt = args.email_summary_prompt.read_text(encoding="utf-8").format(
@@ -1025,11 +1232,12 @@ def render_report(args: argparse.Namespace, scan: dict[str, Any]) -> str:
         scan_json=scan_json,
     )
     if args.dry_run:
-        return append_review_checklist(fallback_report(scan, "dry-run: skipped Hermes summary"), scan)
+        return append_review_checklist(build_intel_brief_draft(scan, "dry-run: skipped Hermes summary"), scan)
     ok, value = run_hermes_prompt(str(args.hermes), prompt, cwd=str(args.project_dir), timeout=args.hermes_timeout)
     if not ok:
-        return append_review_checklist(fallback_report(scan, value), scan)
-    return append_review_checklist(value or fallback_report(scan, "Hermes returned empty output"), scan)
+        return append_review_checklist(build_intel_brief_draft(scan, f"Hermes 摘要失败：{value}"), scan)
+    rendered = value or build_intel_brief_draft(scan, "Hermes returned empty output")
+    return append_review_checklist(ensure_intel_brief_traceability(rendered, scan), scan)
 
 
 def write_report(root: Path, scan: dict[str, Any], markdown: str) -> Path:

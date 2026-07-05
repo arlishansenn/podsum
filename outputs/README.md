@@ -253,6 +253,10 @@ EmailEvidencePolicy -> EmailEvidencePack -> EmailIntelBrief -> ReviewChecklistPa
 - `EmailIntelBrief` is still written as
   `EmailReports/email-summary-YYYY-MM-DD.md`. It includes a Review Checklist
   section as the quality gate view.
+- EmailIntelBrief `object_version` is `0.1`. Dry-run and Hermes-failure paths now
+  produce a reviewable brief draft from EvidencePack instead of a blank failure
+  report: key takeaway, action/worth/ignore sections, source index, snippet-only
+  warnings and truncated-window warnings are preserved for Workbench review.
 
 The full Email Summary master plan lives at:
 

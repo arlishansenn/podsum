@@ -58,6 +58,7 @@ flowchart LR
   - Source Index：UID/from/subject/date 的来源索引与跳转。
   - Review Checklist：质量门禁结果。
   - Export / Approval：approved 后才显示 EPUB/Delivery 的人工下一步命令。
+  - Fill Contract 0.1：从 EvidencePack 生成可审核 draft；保留 key takeaway、需要处理、值得知道、可以忽略、三件事、来源索引、证据边界和 source coverage。
 
 ## Phases
 

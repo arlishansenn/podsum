@@ -113,6 +113,8 @@ class PodsumCliTest(unittest.TestCase):
         self.assertIn("基本不需要再打开邮箱逐封确认", prompt)
         self.assertIn("## key takeaway", prompt)
         self.assertIn("## 如果只记三件事", prompt)
+        self.assertIn("对象: EmailIntelBrief", prompt)
+        self.assertIn("版本: 0.1", prompt)
         self.assertIn("不要把输出写成简单分类清单", prompt)
         self.assertIn("EmailEvidencePack", prompt)
         self.assertIn("snippet` 只是邮件摘要或截断片段", prompt)
@@ -289,6 +291,10 @@ class PodsumCliTest(unittest.TestCase):
 
             self.assertFalse(evidence["missing"])
             self.assertEqual(evidence["scan"]["items"][0]["uid"], "77")
+            self.assertEqual(brief["object_type"], "email_intel_brief")
+            self.assertEqual(brief["object_version"], "0.1")
+            self.assertTrue(any(section["title"] == "key takeaway" for section in brief["sections"]))
+            self.assertTrue(brief["source_coverage"]["complete"])
             self.assertEqual(brief["source_index"][0]["source_uid"], "77")
             self.assertEqual(review["review"]["brief_status"], "approved")
             self.assertTrue(checklist["delivery_ready"])
@@ -487,6 +493,57 @@ class PodsumCliTest(unittest.TestCase):
         self.assertFalse(checklist["has_truncated_warning"])
         self.assertFalse(checklist["marks_snippet_only_claims"])
         self.assertFalse(checklist["ready_to_send"])
+
+    def test_email_intel_brief_draft_from_evidence_is_reviewable(self) -> None:
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        scan = email_summary.normalize_evidence_pack(
+            {
+                "date": "2026-07-05",
+                "account": "fixture@example.invalid",
+                "window": "7d",
+                "raw_count": 2,
+                "scan_limit": 2,
+                "possibly_truncated": True,
+                "items": [
+                    {
+                        "uid": "personal-1",
+                        "date": "Sun, 05 Jul 2026 08:00:00 +0800",
+                        "from": "Fixture Sender <sender@example.invalid>",
+                        "subject": "Fixture Follow-up",
+                        "snippet": "Please review the decision before the meeting.",
+                        "email_type": "personal",
+                        "links": [],
+                        "evidence": [],
+                        "risks": ["snippet_only"],
+                    },
+                    {
+                        "uid": "alert-1",
+                        "date": "Sun, 05 Jul 2026 09:00:00 +0800",
+                        "from": "Fixture Alerts <alerts@example.invalid>",
+                        "subject": "Fixture Google快讯",
+                        "snippet": "Read the source at https://example.invalid/source",
+                        "email_type": "google_alert",
+                        "links": [{"url": "https://example.invalid/source", "context": "Read the source"}],
+                        "evidence": [],
+                        "risks": ["snippet_only"],
+                    },
+                ],
+            },
+            policy,
+        )
+
+        markdown = email_summary.build_intel_brief_draft(scan, "dry-run: skipped Hermes summary")
+        checklist = email_summary.review_checklist(scan, markdown)
+
+        self.assertIn("对象: EmailIntelBrief", markdown)
+        self.assertIn("版本: 0.1", markdown)
+        self.assertIn("## 需要处理", markdown)
+        self.assertIn("## 值得知道", markdown)
+        self.assertIn("## 来源索引", markdown)
+        self.assertIn("触达上限，可能有遗漏", markdown)
+        self.assertIn("仅基于邮件摘要", markdown)
+        self.assertIn("UID=personal-1", markdown)
+        self.assertTrue(checklist["ready_to_send"])
 
     def test_run_once_downloads_only_latest_episode_per_feed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

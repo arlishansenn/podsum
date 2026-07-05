@@ -233,6 +233,7 @@ SOURCE_RE = re.compile(
     r"email://(?P<scan_date>[^/`\s]+)/(?P<source_uid>[^`\s]+)",
     flags=re.IGNORECASE,
 )
+SECTION_RE = re.compile(r"^##\s+(?P<title>.+?)\s*$", flags=re.MULTILINE)
 
 
 def parse_source_index(markdown: str) -> list[dict[str, str]]:
@@ -242,19 +243,57 @@ def parse_source_index(markdown: str) -> list[dict[str, str]]:
     return sources
 
 
+def parse_markdown_sections(markdown: str) -> list[dict[str, Any]]:
+    matches = list(SECTION_RE.finditer(markdown))
+    sections: list[dict[str, Any]] = []
+    for index, match in enumerate(matches):
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
+        body = markdown[start:end].strip()
+        sections.append(
+            {
+                "title": match.group("title").strip(),
+                "chars": len(body),
+                "lines": len([line for line in body.splitlines() if line.strip()]),
+            }
+        )
+    return sections
+
+
+def brief_source_coverage(markdown: str, scan: dict[str, Any] | None) -> dict[str, Any]:
+    sources = parse_source_index(markdown)
+    source_uids = {str(source.get("source_uid") or source.get("uid") or "") for source in sources}
+    items = scan.get("items", []) if isinstance(scan, dict) else []
+    scan_uids = {str(item.get("uid") or "") for item in items if isinstance(item, dict)}
+    missing = sorted(uid for uid in scan_uids if uid and uid not in source_uids)
+    return {
+        "source_count": len(source_uids),
+        "item_count": len(scan_uids),
+        "covered_count": len(scan_uids - set(missing)),
+        "missing_uids": missing,
+        "complete": not missing and bool(scan_uids),
+    }
+
+
 def intel_brief_payload(config: WorkbenchConfig) -> dict[str, Any]:
     review = load_review(config)
     missing = not config.summary_path.exists()
     markdown = "" if missing else config.summary_path.read_text(encoding="utf-8", errors="replace")
     override = str(review.get("brief_override_markdown") or "")
     effective = override or markdown
+    evidence = load_evidence_pack(config)
+    scan = evidence.get("scan") if isinstance(evidence.get("scan"), dict) else None
     return {
+        "object_type": "email_intel_brief",
+        "object_version": email_summary.INTEL_BRIEF_VERSION,
         "missing": missing,
         "path": str(config.summary_path),
         "markdown": markdown,
         "effective_markdown": effective,
         "source": "review_override" if override else "summary_file",
         "source_index": parse_source_index(effective),
+        "sections": parse_markdown_sections(effective),
+        "source_coverage": brief_source_coverage(effective, scan),
         "review": review,
     }
 
@@ -589,6 +628,7 @@ INDEX_HTML = """<!doctype html>
           </div>
         </div>
         <div id="briefStatus" class="notice"></div>
+        <div id="briefSummary" class="stats"></div>
         <div class="brief-grid">
           <article id="briefRendered" class="brief-rendered"></article>
           <div>
@@ -1108,10 +1148,18 @@ function renderEmailDetail(item) {
 function renderBrief() {
   const brief = state.brief || {};
   const markdown = brief.effective_markdown || "";
+  const coverage = brief.source_coverage || {};
+  const sections = brief.sections || [];
   document.getElementById("briefRendered").innerHTML = markdownToHtml(markdown || "No EmailIntelBrief loaded.");
   document.getElementById("briefEditor").value = brief.review?.brief_override_markdown || "";
   document.getElementById("briefStatus").textContent =
-    `${brief.source || "summary_file"} · status: ${brief.review?.brief_status || "draft"} · ${brief.path || ""}`;
+    `${brief.object_type || "email_intel_brief"} ${brief.object_version || ""} · ${brief.source || "summary_file"} · status: ${brief.review?.brief_status || "draft"} · ${brief.path || ""}`;
+  document.getElementById("briefSummary").innerHTML = [
+    `<div class="stat"><strong>${sections.length}</strong><span>sections</span></div>`,
+    `<div class="stat"><strong>${coverage.covered_count ?? 0}/${coverage.item_count ?? 0}</strong><span>source coverage</span></div>`,
+    `<div class="stat"><strong>${brief.source_index?.length || 0}</strong><span>source index rows</span></div>`,
+    `<div class="stat"><strong>${coverage.complete ? "yes" : "no"}</strong><span>coverage complete</span></div>`,
+  ].join("");
   document.getElementById("sourceIndex").innerHTML = `<h3>来源索引</h3>` + (brief.source_index || []).map((source) =>
     `<button data-source-uid="${escapeHtml(source.source_uid || source.uid)}">UID ${escapeHtml(source.uid)} · ${escapeHtml(source.subject)}</button>`
   ).join("");

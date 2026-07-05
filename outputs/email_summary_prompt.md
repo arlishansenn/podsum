@@ -32,6 +32,9 @@
 账号: {account}
 扫描窗口: {window}
 原始邮件数: {raw_count}
+对象: EmailIntelBrief
+版本: 0.1
+来源对象: EmailEvidencePack
 
 ## key takeaway
 
