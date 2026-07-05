@@ -16,7 +16,7 @@ Podsum Email Summary 的主线是：先把邮件作为 Podcast 之外的第二�
 
 核心可视化工作对象只有两个：
 
-- `EmailEvidencePack`：邮件证据包，对应 `EmailReports/email-scan-YYYY-MM-DD.json`。用户需要看见、筛选、标注、锁定它，才能控制下游 Brief 的生成质量。
+- `EmailEvidencePack`：邮件证据包，对应 `EmailReports/email-scan-YYYY-MM-DD.json`。用户需要看见、筛选、标注、锁定它，才能控制下游 Brief 的生成质量。每封邮件至少包含一条 `type=email_snippet` 的邮件自身 evidence；`type=public_link` 的 evidence 只在链接补全时追加。
 - `EmailIntelBrief`：邮件情报简报，对应 `EmailReports/email-summary-YYYY-MM-DD.md`。用户需要审核、编辑、确认和批准它，才能进入 EPUB 或发送阶段。
 
 附属面板有两个：

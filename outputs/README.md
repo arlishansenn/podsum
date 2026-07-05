@@ -242,7 +242,9 @@ EmailPolicyPanel -> EmailEvidencePack -> EmailIntelBrief -> ReviewChecklistPanel
   not a separate core visual work object.
 - `EmailEvidencePack` is still written as
   `EmailReports/email-scan-YYYY-MM-DD.json`. It now includes item links,
-  evidence and risks while staying compatible with older scan JSON files.
+  evidence and risks while staying compatible with older scan JSON files. Each
+  item always gets an `email_snippet` evidence entry from the email metadata and
+  snippet; `public_link` evidence is appended only when link enrichment runs.
 - `EmailIntelBrief` is still written as
   `EmailReports/email-summary-YYYY-MM-DD.md`. It includes a Review Checklist
   section as the quality gate view.

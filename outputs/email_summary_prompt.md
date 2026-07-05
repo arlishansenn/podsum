@@ -8,8 +8,9 @@
 硬性要求：
 - 输入 JSON 是 EmailEvidencePack；它是邮件证据包，不是完整邮箱正文。
 - `snippet` 只是邮件摘要或截断片段，不等于完整正文。
-- `evidence` 是公开网页补全证据；当 evidence.status=fetched 时，应优先使用 evidence.title 和 evidence.excerpt 做判断。
-- 当只有 snippet、没有 fetched evidence 时，必须标注“仅基于邮件摘要”或“待外部验证”。
+- `evidence` 至少包含 `type=email_snippet` 的邮件自身证据；它来自 metadata/snippet，不等于完整正文。
+- `type=public_link` 且 `status=fetched` 的 evidence 是公开网页补全证据，应优先使用其 title 和 excerpt 做判断。
+- 当只有 email_snippet、没有 fetched public_link evidence 时，必须标注“仅基于邮件摘要”或“待外部验证”。
 - 只使用输入 JSON 中的 metadata、snippet、links、evidence、risks，不编造邮件正文或网页内容。
 - 覆盖全部 items，不只看前几封。
 - 高价值线索必须保留 UID、From、Subject、Date 与 `email://{{scan_date}}/{{uid}}` 溯源键。

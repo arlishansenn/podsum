@@ -382,6 +382,86 @@ def body_snippet(message: Message) -> str:
     return clean_text(" ".join(candidates))
 
 
+def email_snippet_evidence(item: dict[str, Any]) -> dict[str, Any]:
+    snippet = str(item.get("snippet") or "")
+    if snippet:
+        excerpt = snippet
+        reason = "snippet_only"
+        status = "available"
+    else:
+        excerpt = clean_text(
+            " | ".join(
+                value
+                for value in [
+                    f"From={item.get('from', '')}",
+                    f"Subject={item.get('subject', '')}",
+                    f"Date={item.get('date', '')}",
+                ]
+                if value and not value.endswith("=")
+            )
+        )
+        reason = "metadata_only"
+        status = "available" if excerpt else "missing"
+    return {
+        "type": "email_snippet",
+        "source": "email",
+        "uid": str(item.get("uid") or ""),
+        "url": "",
+        "final_url": "",
+        "title": str(item.get("subject") or ""),
+        "excerpt": excerpt,
+        "status": status,
+        "reason": reason,
+        "content_type": "message/rfc822",
+    }
+
+
+def has_email_snippet_evidence(item: dict[str, Any]) -> bool:
+    return any(
+        isinstance(evidence, dict) and evidence.get("type") == "email_snippet"
+        for evidence in item.get("evidence", [])
+    )
+
+
+def has_link_evidence(item: dict[str, Any]) -> bool:
+    return any(
+        isinstance(evidence, dict) and evidence.get("type") == "public_link"
+        for evidence in item.get("evidence", [])
+    )
+
+
+def normalize_existing_evidence(item: dict[str, Any]) -> None:
+    evidence_items = item.get("evidence", [])
+    if not isinstance(evidence_items, list):
+        item["evidence"] = []
+        return
+    for evidence in evidence_items:
+        if not isinstance(evidence, dict):
+            continue
+        if not evidence.get("type"):
+            if evidence.get("source") == "email":
+                evidence["type"] = "email_snippet"
+            elif evidence.get("url") or evidence.get("status") in {"fetched", "failed", "skipped"}:
+                evidence["type"] = "public_link"
+        if evidence.get("type") == "email_snippet":
+            evidence.setdefault("source", "email")
+        elif evidence.get("type") == "public_link":
+            evidence.setdefault("source", "link")
+
+
+def ensure_email_snippet_evidence(item: dict[str, Any]) -> None:
+    item.setdefault("evidence", [])
+    if not isinstance(item["evidence"], list):
+        item["evidence"] = []
+    normalize_existing_evidence(item)
+    if not has_email_snippet_evidence(item):
+        item["evidence"].insert(0, email_snippet_evidence(item))
+    risks = set(item.get("risks", []))
+    if not any(isinstance(evidence, dict) and evidence.get("status") == "fetched" for evidence in item["evidence"]):
+        risks.add("snippet_only" if item.get("snippet") else "metadata_only")
+    item["risks"] = sorted(risks)
+
+
 def message_item(uid: str, raw_message: bytes, policy: dict[str, Any] | None = None) -> dict[str, Any]:
     msg = email.message_from_bytes(raw_message)
     fixture_uid = decode_header_value(msg.get("X-Podsum-Fixture-UID"))
@@ -399,9 +479,10 @@ def message_item(uid: str, raw_message: bytes, policy: dict[str, Any] | None = N
         "has_attachments": bool(attachments),
         "links": extract_message_links(msg),
         "evidence": [],
-        "risks": ["snippet_only"],
+        "risks": [],
         "flags": [],
     }
+    ensure_email_snippet_evidence(item)
     item["email_type"] = classify_email(item, policy or DEFAULT_POLICY)
     return item
 
@@ -494,6 +575,20 @@ def fetch_link_context(url: str, timeout: int, excerpt_chars: int = LINK_EXCERPT
         }
 
 
+def link_evidence(value: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(value)
+    enriched.setdefault("type", "public_link")
+    enriched.setdefault("source", "link")
+    enriched.setdefault("url", "")
+    enriched.setdefault("final_url", "")
+    enriched.setdefault("title", "")
+    enriched.setdefault("excerpt", "")
+    enriched.setdefault("status", "")
+    enriched.setdefault("reason", "")
+    enriched.setdefault("content_type", "")
+    return enriched
+
+
 def enrich_item_links(
     item: dict[str, Any],
     policy: dict[str, Any],
@@ -507,14 +602,20 @@ def enrich_item_links(
     timeout = int(limits.get("timeout_seconds", 8))
     excerpt_chars = int(limits.get("excerpt_chars", LINK_EXCERPT_CHARS))
     fetched = 0
-    evidence: list[dict[str, Any]] = []
+    ensure_email_snippet_evidence(item)
+    evidence: list[dict[str, Any]] = [
+        existing
+        for existing in item.get("evidence", [])
+        if isinstance(existing, dict) and existing.get("type") == "email_snippet"
+    ]
     risks = set(item.get("risks", []))
 
     for link in item.get("links", []):
         if fetched >= per_email_limit or fetched >= remaining_budget:
             link["policy_decision"] = "skip"
             evidence.append(
-                {
+                link_evidence(
+                    {
                     "url": link.get("url", ""),
                     "final_url": "",
                     "title": "",
@@ -522,14 +623,16 @@ def enrich_item_links(
                     "status": "skipped",
                     "reason": "link_budget_exhausted",
                     "content_type": "",
-                }
+                    }
+                )
             )
             risks.add("link_budget_exhausted")
             continue
         if not item_policy.get("fetch_links", False):
             link["policy_decision"] = "skip"
             evidence.append(
-                {
+                link_evidence(
+                    {
                     "url": link.get("url", ""),
                     "final_url": "",
                     "title": "",
@@ -537,7 +640,8 @@ def enrich_item_links(
                     "status": "skipped",
                     "reason": f"policy_no_fetch:{item.get('email_type', 'unknown')}",
                     "content_type": "",
-                }
+                    }
+                )
             )
             risks.add("link_skipped")
             continue
@@ -545,7 +649,8 @@ def enrich_item_links(
         if reason:
             link["policy_decision"] = "skip"
             evidence.append(
-                {
+                link_evidence(
+                    {
                     "url": link.get("url", ""),
                     "final_url": "",
                     "title": "",
@@ -553,13 +658,14 @@ def enrich_item_links(
                     "status": "skipped",
                     "reason": reason,
                     "content_type": "",
-                }
+                    }
+                )
             )
             risks.add("tracking_skipped" if "track" in reason or "unsubscribe" in reason else "link_skipped")
             continue
         link["policy_decision"] = "fetch"
         context = fetcher(str(link.get("url") or ""), timeout, excerpt_chars)
-        evidence.append(context)
+        evidence.append(link_evidence(context))
         fetched += 1
         if context.get("status") == "fetched":
             risks.discard("snippet_only")
@@ -581,10 +687,11 @@ def normalize_evidence_pack(scan: dict[str, Any], policy: dict[str, Any]) -> dic
             continue
         item.setdefault("links", [])
         item.setdefault("evidence", [])
-        item.setdefault("risks", ["snippet_only"])
+        item.setdefault("risks", [])
         item.setdefault("flags", [])
         item.setdefault("has_attachments", False)
         item["email_type"] = str(item.get("email_type") or classify_email(item, policy))
+        ensure_email_snippet_evidence(item)
     return scan
 
 
@@ -596,7 +703,7 @@ def enrich_scan_links(scan: dict[str, Any], policy: dict[str, Any]) -> dict[str,
             item.setdefault("risks", [])
             item["risks"] = sorted(set(item["risks"] + ["link_budget_exhausted"]))
             continue
-        if item.get("evidence"):
+        if has_link_evidence(item):
             continue
         used = enrich_item_links(item, policy, remaining_budget=remaining)
         remaining -= used

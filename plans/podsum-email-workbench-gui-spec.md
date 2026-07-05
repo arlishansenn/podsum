@@ -72,6 +72,8 @@ EmailReports/email-scan-YYYY-MM-DD.json
 - 分布：email_type、risks、attachments、links/evidence。
 - 邮件列表：UID、From、Subject、Date、email_type、risk badges。
 - 邮件详情：snippet、links、evidence、risks、attachments。
+- evidence 至少包含 `type=email_snippet` 的邮件自身证据；`type=public_link`
+  是链接补全后的增强证据。
 
 用户操作：
 

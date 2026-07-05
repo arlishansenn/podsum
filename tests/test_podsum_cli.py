@@ -110,7 +110,9 @@ class PodsumCliTest(unittest.TestCase):
         self.assertIn("不要把输出写成简单分类清单", prompt)
         self.assertIn("EmailEvidencePack", prompt)
         self.assertIn("snippet` 只是邮件摘要或截断片段", prompt)
-        self.assertIn("evidence.status=fetched", prompt)
+        self.assertIn("type=email_snippet", prompt)
+        self.assertIn("type=public_link", prompt)
+        self.assertIn("status=fetched", prompt)
         self.assertIn("UID={{uid}} | From={{from}} | Subject={{subject}} | Date={{date}}", prompt)
         self.assertIn("possibly_truncated=true", prompt)
 
@@ -305,10 +307,13 @@ class PodsumCliTest(unittest.TestCase):
             }
 
         used = email_summary.enrich_item_links(item, policy, remaining_budget=10, fetcher=fake_fetcher)
+        link_evidence = [evidence for evidence in item["evidence"] if evidence.get("type") == "public_link"]
+        snippet_evidence = [evidence for evidence in item["evidence"] if evidence.get("type") == "email_snippet"]
 
         self.assertEqual(used, 1)
         self.assertEqual(item["links"][0]["policy_decision"], "fetch")
-        self.assertEqual(item["evidence"][0]["status"], "fetched")
+        self.assertEqual(link_evidence[0]["status"], "fetched")
+        self.assertEqual(snippet_evidence[0]["status"], "available")
         self.assertNotIn("snippet_only", item["risks"])
 
     def test_email_link_enrichment_skips_tracking_urls(self) -> None:
@@ -332,11 +337,12 @@ class PodsumCliTest(unittest.TestCase):
         }
 
         used = email_summary.enrich_item_links(item, policy, remaining_budget=10)
+        link_evidence = [evidence for evidence in item["evidence"] if evidence.get("type") == "public_link"]
 
         self.assertEqual(used, 0)
         self.assertEqual(item["links"][0]["policy_decision"], "skip")
-        self.assertEqual(item["evidence"][0]["status"], "skipped")
-        self.assertIn("track", item["evidence"][0]["reason"])
+        self.assertEqual(link_evidence[0]["status"], "skipped")
+        self.assertIn("track", link_evidence[0]["reason"])
 
     def test_email_review_checklist_flags_missing_traceability(self) -> None:
         scan = {
@@ -877,6 +883,18 @@ class PodsumCliTest(unittest.TestCase):
             self.assertTrue(any(item["email_type"] == "google_alert" for item in scan["items"]))
             self.assertTrue(any(item["links"] for item in scan["items"]))
             self.assertTrue(all("evidence" in item for item in scan["items"]))
+            self.assertTrue(
+                all(
+                    any(evidence.get("type") == "email_snippet" for evidence in item["evidence"])
+                    for item in scan["items"]
+                )
+            )
+            self.assertTrue(
+                all(
+                    any(evidence.get("status") == "available" for evidence in item["evidence"])
+                    for item in scan["items"]
+                )
+            )
             self.assertTrue(all("risks" in item for item in scan["items"]))
 
     def test_email_summary_tolerates_unknown_8bit_charset(self) -> None:
