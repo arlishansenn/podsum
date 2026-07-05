@@ -52,6 +52,7 @@ flowchart LR
   - Email Item List：按类型、风险、附件、链接证据筛选邮件。
   - Evidence Detail：基础邮件证据、链接决策、链接证据、风险分层展示。
   - Review Marks：ignore、important、needs_link_review、type_override。
+  - Fill Contract 0.1：从邮件填入 metadata、snippet、MIME body 形态、附件形态、links.context、email_snippet evidence；公开网页内容只进入 `type=public_link` evidence。
 - `EmailIntelBrief`：
   - Brief Sections：摘要 Markdown 渲染和人工 override。
   - Source Index：UID/from/subject/date 的来源索引与跳转。

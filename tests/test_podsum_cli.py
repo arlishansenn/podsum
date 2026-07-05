@@ -8,6 +8,7 @@ import threading
 import urllib.error
 import urllib.request
 import unittest
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Optional
 
@@ -127,6 +128,59 @@ class PodsumCliTest(unittest.TestCase):
         self.assertEqual(policy["object_type"], "email_policy")
         self.assertEqual(policy["limits"]["max_links_per_email"], 2)
         self.assertTrue(any(item["name"] == "newsletter_article" for item in policy["email_types"]))
+
+    def test_email_message_item_fills_evidence_with_link_contexts(self) -> None:
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        message = EmailMessage()
+        message["From"] = "Fixture Sender <sender@example.invalid>"
+        message["To"] = "Fixture Receiver <receiver@example.invalid>"
+        message["Subject"] = "Fixture Newsletter"
+        message["Date"] = "Sun, 05 Jul 2026 08:00:00 +0800"
+        message.set_content(
+            "Plain lead before https://example.invalid/plain-article and plain tail after the link."
+        )
+        message.add_alternative(
+            "<html><body><p>HTML lead</p><a href=\"https://example.invalid/html-article\">Read HTML article</a></body></html>",
+            subtype="html",
+        )
+
+        item = email_summary.message_item("55", message.as_bytes(), policy)
+        snippet_evidence = [evidence for evidence in item["evidence"] if evidence.get("type") == "email_snippet"]
+
+        self.assertEqual(item["body_part_count"], 2)
+        self.assertEqual(set(item["body_part_types"]), {"text/plain", "text/html"})
+        self.assertEqual(len(item["links"]), 2)
+        self.assertTrue(any("Plain lead before" in link["context"] for link in item["links"]))
+        self.assertTrue(any(link["anchor_text"] == "Read HTML article" for link in item["links"]))
+        self.assertEqual(snippet_evidence[0]["uid"], "55")
+        self.assertEqual(snippet_evidence[0]["link_count"], 2)
+        self.assertEqual(snippet_evidence[0]["body_part_count"], 2)
+
+    def test_scan_file_snippet_urls_become_link_candidates(self) -> None:
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        scan = {
+            "date": "2026-07-05",
+            "items": [
+                {
+                    "uid": "scan-1",
+                    "from": "Fixture <sender@example.invalid>",
+                    "subject": "Fixture Newsletter",
+                    "snippet": "Read the article at https://example.invalid/from-snippet before deciding.",
+                    "evidence": [],
+                    "risks": [],
+                }
+            ],
+        }
+
+        normalized = email_summary.normalize_evidence_pack(scan, policy)
+        item = normalized["items"][0]
+        snippet_evidence = [evidence for evidence in item["evidence"] if evidence.get("type") == "email_snippet"]
+
+        self.assertEqual(normalized["object_version"], "0.1")
+        self.assertEqual(item["links"][0]["normalized_url"], "https://example.invalid/from-snippet")
+        self.assertEqual(item["links"][0]["source_content_type"], "snippet")
+        self.assertIn("before deciding", item["links"][0]["context"])
+        self.assertEqual(snippet_evidence[0]["link_count"], 1)
 
     def test_email_workbench_reports_missing_artifacts_without_side_effects(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -355,6 +409,62 @@ class PodsumCliTest(unittest.TestCase):
         self.assertEqual(item["links"][0]["policy_decision"], "skip")
         self.assertEqual(link_evidence[0]["status"], "skipped")
         self.assertIn("track", link_evidence[0]["reason"])
+
+    def test_email_link_budget_exhaustion_writes_skipped_evidence(self) -> None:
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy["limits"]["max_links_total"] = 1
+        policy["limits"]["max_links_per_email"] = 1
+        scan = {
+            "date": "2026-07-05",
+            "items": [
+                {
+                    "uid": "first",
+                    "from": "Newsletter <sender@example.invalid>",
+                    "subject": "Fixture Newsletter",
+                    "snippet": "Read first https://example.invalid/first",
+                    "email_type": "newsletter_article",
+                    "links": [{"url": "https://example.invalid/first", "context": "Read first"}],
+                    "evidence": [],
+                    "risks": ["snippet_only"],
+                },
+                {
+                    "uid": "second",
+                    "from": "Newsletter <sender@example.invalid>",
+                    "subject": "Fixture Newsletter",
+                    "snippet": "Read second https://example.invalid/second",
+                    "email_type": "newsletter_article",
+                    "links": [{"url": "https://example.invalid/second", "context": "Read second"}],
+                    "evidence": [],
+                    "risks": ["snippet_only"],
+                },
+            ],
+        }
+
+        def fake_fetcher(url: str, timeout: int, excerpt_chars: int) -> dict[str, str]:
+            return {
+                "url": url,
+                "final_url": url,
+                "title": "Fetched article",
+                "excerpt": "Fetched public article excerpt.",
+                "status": "fetched",
+                "reason": "",
+                "content_type": "text/html",
+            }
+
+        enriched = email_summary.enrich_scan_links(email_summary.normalize_evidence_pack(scan, policy), policy, fetcher=fake_fetcher)
+        first_link_evidence = [
+            evidence for evidence in enriched["items"][0]["evidence"] if evidence.get("type") == "public_link"
+        ]
+        second_link_evidence = [
+            evidence for evidence in enriched["items"][1]["evidence"] if evidence.get("type") == "public_link"
+        ]
+
+        self.assertEqual(first_link_evidence[0]["status"], "fetched")
+        self.assertEqual(first_link_evidence[0]["uid"], "first")
+        self.assertEqual(second_link_evidence[0]["status"], "skipped")
+        self.assertEqual(second_link_evidence[0]["reason"], "link_budget_exhausted")
+        self.assertEqual(second_link_evidence[0]["uid"], "second")
+        self.assertEqual(enriched["items"][1]["links"][0]["policy_decision"], "skip")
 
     def test_email_review_checklist_flags_missing_traceability(self) -> None:
         scan = {

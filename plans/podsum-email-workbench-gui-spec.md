@@ -104,9 +104,11 @@ EmailReports/email-scan-YYYY-MM-DD.json
 - Evidence Health：strong/usable/weak/failed/skipped。
 - 分布：email_type、risks、attachments、links/evidence。
 - 邮件列表：UID、From、Subject、Date、email_type、risk badges。
-- 邮件详情：Base Evidence、Link Decision、Link Evidence、Risks。
+- 邮件详情：Base Evidence、Link Decision、Link Context、Link Evidence、Risks。
 - evidence 至少包含 `type=email_snippet` 的邮件自身证据；`type=public_link`
   是链接补全后的增强证据。
+- EvidencePack 0.1 只保存 MIME body 形态、附件形态、snippet 和链接上下文；
+  不把完整 raw 邮件正文作为默认 artifact 保存。
 
 用户操作：
 

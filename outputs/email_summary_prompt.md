@@ -9,6 +9,7 @@
 - 输入 JSON 是 EmailEvidencePack；它是邮件证据包，不是完整邮箱正文。
 - `snippet` 只是邮件摘要或截断片段，不等于完整正文。
 - `evidence` 至少包含 `type=email_snippet` 的邮件自身证据；它来自 metadata/snippet，不等于完整正文。
+- `links[].context` 和 `public_link.email_context` 来自邮件正文里的链接上下文，可用于判断链接为何出现在邮件里。
 - `type=public_link` 且 `status=fetched` 的 evidence 是公开网页补全证据，应优先使用其 title 和 excerpt 做判断。
 - 当只有 email_snippet、没有 fetched public_link evidence 时，必须标注“仅基于邮件摘要”或“待外部验证”。
 - 只使用输入 JSON 中的 metadata、snippet、links、evidence、risks，不编造邮件正文或网页内容。

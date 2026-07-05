@@ -1056,6 +1056,7 @@ function renderEmailDetail(item) {
   const linkRows = links.map((link) => `<tr>
       <td>${escapeHtml(link.policy_decision || "pending")}</td>
       <td>${escapeHtml(link.anchor_text || "")}</td>
+      <td>${escapeHtml(link.context || "")}</td>
       <td>${escapeHtml(link.url || "")}</td>
     </tr>`).join("");
   const evidenceRows = linkEvidence.map((ev) => `<li>
@@ -1079,8 +1080,8 @@ function renderEmailDetail(item) {
     <p>${badge(policy.fetch_links ? "fetch links" : "snippet only", policy.fetch_links ? "good" : "skipped")} ${escapeHtml(policy.summary_focus || "")}</p>
     <p class="notice">${escapeHtml(nextAction)}</p>
     <table>
-      <thead><tr><th>decision</th><th>anchor</th><th>url</th></tr></thead>
-      <tbody>${linkRows || `<tr><td colspan="3">No links detected.</td></tr>`}</tbody>
+      <thead><tr><th>decision</th><th>anchor</th><th>context</th><th>url</th></tr></thead>
+      <tbody>${linkRows || `<tr><td colspan="4">No links detected.</td></tr>`}</tbody>
     </table>
 
     <h3>3. Link Evidence</h3>

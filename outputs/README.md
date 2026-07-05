@@ -246,6 +246,10 @@ EmailEvidencePolicy -> EmailEvidencePack -> EmailIntelBrief -> ReviewChecklistPa
   evidence and risks while staying compatible with older scan JSON files. Each
   item always gets an `email_snippet` evidence entry from the email metadata and
   snippet; `public_link` evidence is appended only when link enrichment runs.
+- EvidencePack `object_version` is `0.1`. The fill path extracts MIME body
+  shape, attachment shape, URL candidates and local link context from email
+  bodies without storing full raw email. Older scan JSON is normalized by
+  extracting URL candidates from `snippet` when explicit `links` are missing.
 - `EmailIntelBrief` is still written as
   `EmailReports/email-summary-YYYY-MM-DD.md`. It includes a Review Checklist
   section as the quality gate view.
