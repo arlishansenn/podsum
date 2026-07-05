@@ -19,7 +19,7 @@ from typing import Any
 
 import podsum_email_summary as email_summary
 import podsum_runtime
-from email import need_store
+from email import need_store, object_harness
 from email.io import atomic_write_json
 from email.schemas import EvidenceNeed, EvidenceNeedEvent, transition_need
 
@@ -153,6 +153,7 @@ def context_payload(config: WorkbenchConfig) -> dict[str, Any]:
             "host": config.host,
             "port": config.port,
             "mode": "manual-local-workbench",
+            "renderer_contract": object_harness.RENDERER_CONTRACT,
             "safe_defaults": {
                 "reads_imap": False,
                 "calls_hermes": False,
@@ -620,6 +621,8 @@ def make_handler(config: WorkbenchConfig) -> type[BaseHTTPRequestHandler]:
             try:
                 if path in {"", "/", "/index.html"}:
                     text_response(self, 200, INDEX_HTML, "text/html")
+                elif path == "/harness":
+                    text_response(self, 200, HARNESS_HTML, "text/html")
                 elif path == "/styles.css":
                     text_response(self, 200, STYLES_CSS, "text/css")
                 elif path == "/app.js":
@@ -640,6 +643,15 @@ def make_handler(config: WorkbenchConfig) -> type[BaseHTTPRequestHandler]:
                     json_response(self, 200, {"ok": True, **needs_payload(config)})
                 elif path == "/api/commands":
                     json_response(self, 200, {"ok": True, **commands_payload(config)})
+                elif path == "/api/harness/catalog":
+                    json_response(self, 200, {"ok": True, "catalog": object_harness.list_catalog()})
+                elif path == "/api/harness/session":
+                    query = urllib.parse.parse_qs(parsed.query)
+                    session = object_harness.new_session(
+                        str(query.get("object_type", ["email_evidence_pack"])[0]),
+                        str(query.get("scenario", ["normal"])[0]),
+                    )
+                    json_response(self, 200, {"ok": True, "session": session.to_dict()})
                 else:
                     json_response(self, 404, {"ok": False, "error": "not found"})
             except Exception as exc:
@@ -667,6 +679,30 @@ def make_handler(config: WorkbenchConfig) -> type[BaseHTTPRequestHandler]:
                 elif path.startswith("/api/needs/") and path.endswith("/action"):
                     need_id = urllib.parse.unquote(path.removeprefix("/api/needs/").removesuffix("/action").strip("/"))
                     json_response(self, 200, {"ok": True, **update_need_action(config, need_id, body)})
+                elif path == "/api/harness/session":
+                    session = object_harness.new_session(str(body.get("object_type") or ""), str(body.get("scenario") or ""))
+                    json_response(self, 200, {"ok": True, "session": session.to_dict()})
+                elif path == "/api/harness/event":
+                    session = object_harness.session_from_dict(body.get("session") if isinstance(body.get("session"), dict) else {})
+                    event_payload = body.get("payload") if isinstance(body.get("payload"), dict) else {}
+                    next_session = object_harness.apply_event(
+                        session,
+                        str(body.get("event_type") or ""),
+                        event_payload,
+                        str(body.get("actor") or "ObjectHarness"),
+                    )
+                    json_response(self, 200, {"ok": True, "session": next_session.to_dict()})
+                elif path == "/api/harness/import":
+                    fixture = body.get("fixture") if isinstance(body.get("fixture"), dict) else {}
+                    session = object_harness.import_session_fixture(
+                        str(body.get("object_type") or ""),
+                        str(body.get("scenario") or "normal"),
+                        fixture,
+                    )
+                    json_response(self, 200, {"ok": True, "session": session.to_dict()})
+                elif path == "/api/harness/export":
+                    session = object_harness.session_from_dict(body.get("session") if isinstance(body.get("session"), dict) else {})
+                    json_response(self, 200, {"ok": True, "export": object_harness.export_session_fixture(session)})
                 else:
                     json_response(self, 404, {"ok": False, "error": "not found"})
             except Exception as exc:
@@ -710,6 +746,103 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--policy-file", type=Path, default=DEFAULT_POLICY_FILE)
     parser.add_argument("--topic-file", type=Path, default=DEFAULT_TOPIC_FILE)
+
+
+HARNESS_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Podsum Email Object Harness</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">VIS Object Test Harness</p>
+      <h1>Podsum Email Object Harness</h1>
+      <p>Fixture-only object tests. No IMAP, no link fetching, no Hermes, no sending, no launchd changes.</p>
+    </div>
+    <div class="toolbar">
+      <a class="command" href="/">Formal Workbench</a>
+    </div>
+  </header>
+  <main class="layout">
+    <section class="panel">
+      <h2>Object selector</h2>
+      <label>Object type <select id="harnessObjectType" data-testid="harness-object-type"></select></label>
+      <label>Scenario <select id="harnessScenario" data-testid="harness-scenario"></select></label>
+      <button id="harnessLoad" data-testid="harness-load">Load fixture</button>
+      <button id="harnessClear" data-testid="harness-clear">Clear data</button>
+      <button id="harnessValidate" data-testid="harness-validate">Validate object</button>
+      <button id="harnessMockSkill" data-testid="harness-mock-skill">Mock Skill</button>
+    </section>
+    <section class="panel wide">
+      <h2>Shared renderer payload</h2>
+      <div id="harnessSummary" class="stats"></div>
+      <pre id="harnessObject" data-testid="harness-object-json"></pre>
+    </section>
+    <section class="panel wide">
+      <h2>Debug panel</h2>
+      <pre id="harnessDebug" data-testid="harness-debug-json"></pre>
+    </section>
+  </main>
+  <script>
+    let harnessCatalog = null;
+    let harnessSession = null;
+    async function harnessApi(path, options) {
+      const response = await fetch(path, options || {});
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Harness API failed');
+      return data;
+    }
+    function renderHarness() {
+      document.getElementById('harnessSummary').innerHTML = [
+        `<div class="stat"><strong>Object</strong><span>${harnessSession.selected_object_type}</span></div>`,
+        `<div class="stat"><strong>Fixture</strong><span>${harnessSession.selected_fixture}</span></div>`,
+        `<div class="stat"><strong>State</strong><span>${harnessSession.lifecycle_status}</span></div>`,
+        `<div class="stat"><strong>Events</strong><span>${harnessSession.event_log.length}</span></div>`
+      ].join('');
+      document.getElementById('harnessObject').textContent = JSON.stringify(harnessSession.renderer, null, 2);
+      document.getElementById('harnessDebug').textContent = JSON.stringify({
+        risks: harnessSession.risks,
+        missing_fields: harnessSession.missing_fields,
+        event_log: harnessSession.event_log,
+        version_history: harnessSession.version_history
+      }, null, 2);
+    }
+    async function loadHarnessSession() {
+      const objectType = document.getElementById('harnessObjectType').value;
+      const scenario = document.getElementById('harnessScenario').value;
+      const data = await harnessApi(`/api/harness/session?object_type=${encodeURIComponent(objectType)}&scenario=${encodeURIComponent(scenario)}`);
+      harnessSession = data.session;
+      renderHarness();
+    }
+    async function sendHarnessEvent(eventType, payload) {
+      const data = await harnessApi('/api/harness/event', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({session: harnessSession, event_type: eventType, payload: payload || {}, actor: 'HarnessUI'})
+      });
+      harnessSession = data.session;
+      renderHarness();
+    }
+    async function bootHarness() {
+      const data = await harnessApi('/api/harness/catalog');
+      harnessCatalog = data.catalog;
+      document.getElementById('harnessObjectType').innerHTML = harnessCatalog.object_types.map((item) => `<option value="${item}">${item}</option>`).join('');
+      document.getElementById('harnessScenario').innerHTML = harnessCatalog.scenarios.map((item) => `<option value="${item}">${item}</option>`).join('');
+      document.getElementById('harnessLoad').addEventListener('click', loadHarnessSession);
+      document.getElementById('harnessClear').addEventListener('click', () => sendHarnessEvent('clear_data', {}));
+      document.getElementById('harnessValidate').addEventListener('click', () => sendHarnessEvent('validate_object', {}));
+      document.getElementById('harnessMockSkill').addEventListener('click', () => sendHarnessEvent(harnessSession.selected_object_type === 'email_intel_brief' ? 'mock_brief_agent' : 'mock_evidence_agent', {}));
+      await loadHarnessSession();
+    }
+    bootHarness().catch((error) => { document.getElementById('harnessDebug').textContent = error.message; });
+  </script>
+</body>
+</html>
+"""
 
 
 INDEX_HTML = """<!doctype html>
