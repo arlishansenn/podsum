@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import subprocess
 import sys
 import textwrap
@@ -18,6 +19,10 @@ PODSUM = ROOT / "outputs" / "podsum.py"
 sys.path.insert(0, str(ROOT / "outputs"))
 import podsum_email_summary as email_summary  # noqa: E402
 import podsum_email_workbench as email_workbench  # noqa: E402
+import podsum_runtime  # noqa: E402
+from email import brief_agent, evidence_agent, graph as email_graph, need_store  # noqa: E402
+from email.providers import FakeLinkClassifier, LinkClassification  # noqa: E402
+from email.schemas import EmailEvidencePack, EmailIntelBrief, EvidenceNeed, EvidenceNeedEvent, transition_need  # noqa: E402
 
 
 def run_podsum(
@@ -99,6 +104,29 @@ def write_feed(path: Path, old_audio: Path, new_audio: Path) -> None:
 
 
 class PodsumCliTest(unittest.TestCase):
+    def test_podsum_runtime_env_override_wins_for_generated_commands(self) -> None:
+        old_value = os.environ.get(podsum_runtime.PODSUM_PYTHON_ENV)
+        os.environ[podsum_runtime.PODSUM_PYTHON_ENV] = "/opt/podsum/.venv/bin/python"
+        try:
+            self.assertEqual(podsum_runtime.podsum_python(), "/opt/podsum/.venv/bin/python")
+            config = email_workbench.WorkbenchConfig(
+                root=ROOT,
+                date="2026-07-05",
+                host="127.0.0.1",
+                port=0,
+                policy_file=ROOT / "outputs" / "email_link_policy.md",
+                topic_file=ROOT / "outputs" / "topic.md",
+            )
+            commands = email_workbench.commands_payload(config)["commands"]
+        finally:
+            if old_value is None:
+                os.environ.pop(podsum_runtime.PODSUM_PYTHON_ENV, None)
+            else:
+                os.environ[podsum_runtime.PODSUM_PYTHON_ENV] = old_value
+
+        self.assertIn("/opt/podsum/.venv/bin/python", commands["regenerate_summary_no_send"])
+        self.assertNotIn("/usr/bin/python3", commands["regenerate_summary_no_send"])
+
     def test_email_workbench_help_exists(self) -> None:
         result = run_podsum("email-workbench", "--help")
 
@@ -162,9 +190,14 @@ class PodsumCliTest(unittest.TestCase):
                 }
             ],
         }
-        scan = email_summary.normalize_evidence_pack(
+        pack = evidence_agent.build_evidence_pack(
             {
                 "date": "2026-07-05",
+                "account": "fixture@example.invalid",
+                "window": "1d",
+                "scan_limit": 10,
+                "raw_count": 1,
+                "possibly_truncated": False,
                 "items": [
                     {
                         "uid": "topic-1",
@@ -175,10 +208,13 @@ class PodsumCliTest(unittest.TestCase):
                 ],
             },
             policy,
+            topic_map,
+            False,
+            email_summary.fetch_link_context,
         )
+        scan = pack.to_dict()
 
-        scan = email_summary.apply_topics(scan, topic_map)
-
+        self.assertIsInstance(pack, EmailEvidencePack)
         self.assertEqual(scan["topic_map"]["object_type"], "email_topic_map")
         self.assertEqual(scan["topic_hits"][0]["id"], "tracked_agent")
         self.assertEqual(scan["items"][0]["topics"][0]["name"], "Tracked Agent Work")
@@ -210,6 +246,107 @@ class PodsumCliTest(unittest.TestCase):
         self.assertEqual(snippet_evidence[0]["link_count"], 2)
         self.assertEqual(snippet_evidence[0]["body_part_count"], 2)
 
+    def test_email_evidence_agent_fake_link_classifier_writes_audit_fields(self) -> None:
+        def fixture_fetcher(url: str, timeout: int, excerpt_chars: int) -> dict:
+            return {
+                "url": url,
+                "final_url": url,
+                "title": "Fixture Article",
+                "excerpt": "Fixture article body",
+                "status": "fetched",
+                "reason": "",
+                "content_type": "text/html",
+            }
+
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        topic_map = {"object_type": "email_topic_map", "version": 1, "topics": []}
+        classifier = FakeLinkClassifier(
+            {
+                "https://example.invalid/article": LinkClassification(
+                    classification="content",
+                    decision_source="ai_classifier",
+                    decision_reason="fixture_content",
+                    classifier_version="fake-v1",
+                    confidence=0.9,
+                ),
+                "https://example.invalid/weak": LinkClassification(
+                    classification="content",
+                    decision_source="ai_classifier",
+                    decision_reason="fixture_weak",
+                    classifier_version="fake-v1",
+                    confidence=0.2,
+                ),
+            }
+        )
+
+        pack = evidence_agent.build_evidence_pack_with_classifier(
+            {
+                "date": "2026-07-05",
+                "account": "fixture@example.invalid",
+                "window": "1d",
+                "scan_limit": 10,
+                "raw_count": 1,
+                "possibly_truncated": False,
+                "items": [
+                    {
+                        "uid": "classify-1",
+                        "from": "Fixture <sender@example.invalid>",
+                        "subject": "Fixture Newsletter",
+                        "snippet": "Read https://example.invalid/article and https://example.invalid/weak",
+                    }
+                ],
+            },
+            policy,
+            topic_map,
+            True,
+            fixture_fetcher,
+            classifier,
+            0.5,
+        )
+        links = [evidence for evidence in pack.to_dict()["items"][0]["evidence"] if evidence.get("type") == "public_link"]
+
+        self.assertEqual(links[0]["classification"], "content")
+        self.assertEqual(links[0]["decision_source"], "ai_classifier")
+        self.assertEqual(links[0]["decision_reason"], "fixture_content")
+        self.assertEqual(links[0]["classifier_version"], "fake-v1")
+        self.assertEqual(links[0]["confidence"], 0.9)
+        self.assertEqual(links[1]["classification"], "unknown")
+        self.assertEqual(links[1]["decision_source"], "ai_classifier")
+        self.assertEqual(links[1]["decision_reason"], "low_confidence:fixture_weak")
+        self.assertEqual(links[1]["confidence"], 0.2)
+
+    def test_email_evidence_agent_builds_pack_from_eml_message(self) -> None:
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        topic_map = {
+            "object_type": "email_topic_map",
+            "version": 1,
+            "topics": [{"id": "agent", "name": "Agent", "keywords": ["agent workflow"]}],
+        }
+        message = EmailMessage()
+        message["From"] = "Newsletter <sender@example.invalid>"
+        message["Subject"] = "Fixture Newsletter"
+        message["Date"] = "Sun, 05 Jul 2026 08:00:00 +0800"
+        message.set_content("Agent workflow story at https://example.invalid/article")
+
+        pack = evidence_agent.build_evidence_pack_from_messages(
+            "2026-07-05",
+            "fixture@example.invalid",
+            "1d",
+            10,
+            1,
+            [("1", message.as_bytes())],
+            policy,
+            topic_map,
+            False,
+            email_summary.fetch_link_context,
+        )
+        item = pack.to_dict()["items"][0]
+
+        self.assertEqual(item["links"][0]["normalized_url"], "https://example.invalid/article")
+        self.assertEqual(item["evidence"][0]["type"], "email_snippet")
+        self.assertEqual(item["topics"][0]["id"], "agent")
+        self.assertIn("snippet_only", item["risks"])
+
     def test_scan_file_snippet_urls_become_link_candidates(self) -> None:
         policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
         scan = {
@@ -235,6 +372,319 @@ class PodsumCliTest(unittest.TestCase):
         self.assertEqual(item["links"][0]["source_content_type"], "snippet")
         self.assertIn("before deciding", item["links"][0]["context"])
         self.assertEqual(snippet_evidence[0]["link_count"], 1)
+
+    def test_email_dataclass_schemas_round_trip_scan_and_workbench_brief(self) -> None:
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        scan = email_summary.normalize_evidence_pack(
+            {
+                "date": "2026-07-05",
+                "account": "fixture@example.invalid",
+                "window": "1d",
+                "scan_limit": 10,
+                "raw_count": 1,
+                "possibly_truncated": False,
+                "items": [
+                    {
+                        "uid": "77",
+                        "date": "Sun, 05 Jul 2026 08:00:00 +0800",
+                        "from": "Fixture Sender <sender@example.invalid>",
+                        "subject": "Fixture actionable mail",
+                        "snippet": "A fixture email that should become a summary.",
+                        "has_attachments": False,
+                        "email_type": "personal",
+                        "links": [],
+                        "evidence": [],
+                        "risks": ["snippet_only"],
+                        "flags": [],
+                    }
+                ],
+            },
+            policy,
+        )
+        scan["unexpected"] = "ignored"
+        pack = EmailEvidencePack.from_dict(scan)
+        expected_scan = dict(scan)
+        del expected_scan["unexpected"]
+
+        self.assertEqual(pack.to_dict(), expected_scan)
+
+        review = email_workbench.default_review("2026-07-05")
+        composition = brief_agent.compose_with_need_store(
+            pack,
+            {},
+            need_store.empty_need_store(),
+            "/tmp/email-summary-2026-07-05.md",
+            review,
+            "dry-run: fixture",
+        )
+        intel = EmailIntelBrief.from_dict({**composition.email_intel_brief.to_dict(), "unexpected": "ignored"})
+
+        self.assertEqual(intel.to_dict(), composition.email_intel_brief.to_dict())
+        self.assertEqual(intel.source_index[0]["source_uid"], "77")
+        self.assertTrue(intel.source_coverage["complete"])
+
+    def test_email_brief_agent_snippet_only_persists_need_without_external_calls(self) -> None:
+        scan = {
+            "object_type": "email_evidence_pack",
+            "object_version": email_summary.EVIDENCE_PACK_VERSION,
+            "status": "ready_for_summary",
+            "date": "2026-07-05",
+            "account": "fixture@example.invalid",
+            "window": "1d",
+            "scan_limit": 10,
+            "raw_count": 1,
+            "possibly_truncated": False,
+            "items": [
+                {
+                    "uid": "77",
+                    "date": "Sun, 05 Jul 2026 08:00:00 +0800",
+                    "from": "Fixture Sender <sender@example.invalid>",
+                    "subject": "Decision needs source",
+                    "snippet": "A snippet-only decision signal.",
+                    "has_attachments": False,
+                    "email_type": "personal",
+                    "links": [],
+                    "evidence": [{"type": "email_snippet", "status": "available", "excerpt": "A snippet-only decision signal."}],
+                    "risks": ["snippet_only"],
+                    "flags": [],
+                    "topics": [{"id": "decision", "name": "Decision", "priority": "high"}],
+                }
+            ],
+            "topic_map": {"object_type": "email_topic_map", "version": 1, "topics": [], "topic_count": 1},
+            "topic_hits": [],
+        }
+        called: list[str] = []
+
+        def forbidden_hermes(hermes: str, prompt: str, cwd: str, timeout: int) -> tuple[bool, str]:
+            called.append("hermes")
+            raise AssertionError("Hermes must not be called")
+
+        def forbidden_fetch(url: str, timeout: int, excerpt_chars: int) -> dict[str, str]:
+            called.append("fetch")
+            raise AssertionError("fetch must not be called")
+
+        def forbidden_imap(args: object, policy: dict[str, object]) -> dict[str, object]:
+            called.append("imap")
+            raise AssertionError("IMAP must not be called")
+
+        old_hermes = email_summary.run_hermes_prompt
+        old_fetch = email_summary.fetch_link_context
+        old_imap = email_summary.scan_imap
+        email_summary.run_hermes_prompt = forbidden_hermes
+        email_summary.fetch_link_context = forbidden_fetch
+        email_summary.scan_imap = forbidden_imap
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                artifact_dir = Path(tmp)
+                composition = brief_agent.compose_and_persist(
+                    EmailEvidencePack.from_dict(scan),
+                    scan["topic_map"],
+                    artifact_dir,
+                    str(artifact_dir / "email-summary-2026-07-05.md"),
+                    {},
+                    "dry-run: fixture",
+                )
+                loaded = need_store.load_need_store(artifact_dir)
+        finally:
+            email_summary.run_hermes_prompt = old_hermes
+            email_summary.fetch_link_context = old_fetch
+            email_summary.scan_imap = old_imap
+
+        self.assertEqual(called, [])
+        self.assertEqual(len(loaded["needs"]), 1)
+        need = loaded["needs"][0]
+        self.assertEqual(need["topic_id"], "decision")
+        self.assertEqual(need["known_source_refs"], ["email:77"])
+        self.assertIn(need["need_id"], composition.email_intel_brief.markdown)
+        self.assertEqual(composition.email_intel_brief.source_coverage["need_ids"], [need["need_id"]])
+        self.assertNotIn("待外部验证", composition.email_intel_brief.markdown)
+        self.assertNotIn("claim_or_question", composition.email_intel_brief.markdown)
+
+    def test_email_need_reconciliation_fulfills_and_stales_from_future_scans_without_external_calls(self) -> None:
+        day1_scan = {
+            "object_type": "email_evidence_pack",
+            "object_version": email_summary.EVIDENCE_PACK_VERSION,
+            "status": "ready_for_summary",
+            "date": "2026-07-05",
+            "account": "fixture@example.invalid",
+            "window": "1d",
+            "scan_limit": 10,
+            "raw_count": 1,
+            "possibly_truncated": False,
+            "items": [
+                {
+                    "uid": "77",
+                    "date": "Sun, 05 Jul 2026 08:00:00 +0800",
+                    "from": "Fixture Sender <sender@example.invalid>",
+                    "subject": "Decision needs source",
+                    "snippet": "A snippet-only decision signal.",
+                    "has_attachments": False,
+                    "email_type": "personal",
+                    "links": [],
+                    "evidence": [{"type": "email_snippet", "status": "available", "excerpt": "A snippet-only decision signal."}],
+                    "risks": ["snippet_only"],
+                    "flags": [],
+                    "topics": [{"id": "decision", "name": "Decision", "priority": "high"}],
+                }
+            ],
+            "topic_map": {"object_type": "email_topic_map", "version": 1, "topics": [], "topic_count": 1},
+            "topic_hits": [],
+        }
+        day2_scan = json.loads(json.dumps(day1_scan))
+        day2_scan["date"] = "2026-07-06"
+        day2_scan["items"][0]["risks"] = []
+        day2_scan["items"][0]["evidence"] = [
+            {
+                "type": "public_link",
+                "uid": "77",
+                "url": "https://example.invalid/source",
+                "status": "fetched",
+                "title": "Source",
+                "excerpt": "Verified source text.",
+            }
+        ]
+        called: list[str] = []
+
+        def forbidden_hermes(hermes: str, prompt: str, cwd: str, timeout: int) -> tuple[bool, str]:
+            called.append("hermes")
+            raise AssertionError("Hermes must not be called")
+
+        def forbidden_fetch(url: str, timeout: int, excerpt_chars: int) -> dict[str, str]:
+            called.append("fetch")
+            raise AssertionError("fetch must not be called")
+
+        def forbidden_imap(args: object, policy: dict[str, object]) -> dict[str, object]:
+            called.append("imap")
+            raise AssertionError("IMAP must not be called")
+
+        old_hermes = email_summary.run_hermes_prompt
+        old_fetch = email_summary.fetch_link_context
+        old_imap = email_summary.scan_imap
+        email_summary.run_hermes_prompt = forbidden_hermes
+        email_summary.fetch_link_context = forbidden_fetch
+        email_summary.scan_imap = forbidden_imap
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                artifact_dir = Path(tmp)
+                brief_agent.compose_and_persist(
+                    EmailEvidencePack.from_dict(day1_scan),
+                    day1_scan["topic_map"],
+                    artifact_dir,
+                    str(artifact_dir / "email-summary-2026-07-05.md"),
+                    {},
+                    "dry-run: fixture",
+                )
+                brief_agent.compose_and_persist(
+                    EmailEvidencePack.from_dict(day2_scan),
+                    day2_scan["topic_map"],
+                    artifact_dir,
+                    str(artifact_dir / "email-summary-2026-07-06.md"),
+                    {},
+                    "dry-run: fixture",
+                )
+                loaded = need_store.load_need_store(artifact_dir)
+        finally:
+            email_summary.run_hermes_prompt = old_hermes
+            email_summary.fetch_link_context = old_fetch
+            email_summary.scan_imap = old_imap
+
+        self.assertEqual(called, [])
+        self.assertEqual(len(loaded["needs"]), 1)
+        fulfilled = loaded["needs"][0]
+        self.assertEqual(fulfilled["status"], "fulfilled_now")
+        self.assertEqual(fulfilled["resolved_by"], ["pack-2026-07-06"])
+        self.assertNotEqual(fulfilled["audit_trail"][0]["added_evidence_refs"], [])
+
+        watching = EvidenceNeed.from_dict({**fulfilled, "status": "open", "resolved_by": [], "audit_trail": []})
+        no_evidence_pack = EmailEvidencePack.from_dict(day1_scan)
+        watched_store = brief_agent.reconcile_need_store(
+            no_evidence_pack,
+            need_store.replace_need(need_store.empty_need_store(), watching),
+            "2026-07-07T08:00:00Z",
+            2,
+        )
+        self.assertEqual(watched_store["needs"][0]["status"], "watching")
+        stale_store = brief_agent.reconcile_need_store(no_evidence_pack, watched_store, "2026-07-08T08:00:00Z", 2)
+        self.assertEqual(stale_store["needs"][0]["status"], "stale")
+
+    def test_email_dataclass_schemas_validate_required_and_literal_fields(self) -> None:
+        with self.assertRaises(ValueError):
+            EmailEvidencePack.from_dict({"object_type": "email_evidence_pack"})
+        with self.assertRaises(ValueError):
+            EmailEvidencePack.from_dict(
+                {
+                    "object_type": "email_evidence_pack",
+                    "object_version": "0.1",
+                    "status": "unknown",
+                    "date": "2026-07-05",
+                    "account": "fixture@example.invalid",
+                    "window": "1d",
+                    "scan_limit": 10,
+                    "raw_count": 0,
+                    "possibly_truncated": False,
+                    "items": [],
+                }
+            )
+
+    def test_email_need_store_round_trip_transition_and_validation(self) -> None:
+        need = EvidenceNeed.from_dict(
+            {
+                "need_id": "need-1",
+                "status": "open",
+                "urgency": "high",
+                "topic_id": "ai_industry_agent_strategy",
+                "source_brief_id": "brief-2026-07-05",
+                "claim_or_question": "Does the claim have primary-source evidence?",
+                "why_needed": "The current brief only has snippet evidence.",
+                "known_source_refs": ["email:77"],
+                "needed_evidence": ["public_link"],
+                "created_at": "2026-07-05T08:00:00Z",
+                "last_checked_at": "2026-07-05T08:00:00Z",
+                "resolved_by": [],
+                "response_policy": "check_future_scans",
+                "audit_trail": [],
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            store = need_store.replace_need(need_store.empty_need_store(), need)
+            need_store.save_need_store(Path(tmp), store)
+            loaded = need_store.load_need_store(Path(tmp))
+            loaded_need = EvidenceNeed.from_dict(loaded["needs"][0])
+            event = EvidenceNeedEvent.from_dict(
+                {
+                    "event_type": "fulfill",
+                    "at": "2026-07-05T09:00:00Z",
+                    "actor": "EmailIntelBriefAgent",
+                    "reason": "Fetched link evidence is enough.",
+                    "added_evidence_refs": ["link:77:1"],
+                    "resolved_by": ["pack-2026-07-05"],
+                }
+            )
+            transitioned = transition_need(loaded_need, event)
+
+            self.assertEqual(transitioned.status, "fulfilled_now")
+            self.assertEqual(transitioned.resolved_by, ("pack-2026-07-05",))
+            self.assertEqual(transitioned.audit_trail[0].old_status, "open")
+            self.assertEqual(transitioned.audit_trail[0].new_status, "fulfilled_now")
+
+        invalid = need.to_dict()
+        invalid["status"] = "unknown"
+        with self.assertRaises(ValueError):
+            EvidenceNeed.from_dict(invalid)
+        with self.assertRaises(ValueError):
+            transition_need(
+                need,
+                EvidenceNeedEvent.from_dict(
+                    {
+                        "event_type": "fulfill",
+                        "at": "2026-07-05T10:00:00Z",
+                        "actor": "EmailIntelBriefAgent",
+                        "reason": "No evidence was added.",
+                        "added_evidence_refs": [],
+                        "resolved_by": [],
+                    }
+                ),
+            )
 
     def test_email_workbench_reports_missing_artifacts_without_side_effects(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -276,6 +726,8 @@ class PodsumCliTest(unittest.TestCase):
             self.assertEqual(topics["topic_map"]["object_type"], "email_topic_map")
             self.assertIn("generate_scan_manual_imap", commands["commands"])
             self.assertIn("--email-topic-file", commands["commands"]["regenerate_summary_no_send"])
+            self.assertNotIn("/usr/bin/python3", commands["commands"]["regenerate_summary_no_send"])
+            self.assertIn(shlex.quote(podsum_runtime.podsum_python()), commands["commands"]["regenerate_summary_no_send"])
             self.assertFalse((tmp_path / "downloads" / "EmailReports").exists())
 
     def test_email_workbench_review_sidecar_preserves_artifacts(self) -> None:
@@ -366,6 +818,130 @@ class PodsumCliTest(unittest.TestCase):
             self.assertEqual(scan_path.read_text(encoding="utf-8"), scan_text)
             self.assertEqual(summary_path.read_text(encoding="utf-8"), summary_text)
             self.assertTrue((reports / "email-review-2026-07-05.json").exists())
+
+    def test_email_workbench_needs_api_manual_close_and_ui_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            reports = tmp_path / "downloads" / "EmailReports"
+            reports.mkdir(parents=True)
+            scan_text = json.dumps(
+                {
+                    "object_type": "email_evidence_pack",
+                    "status": "ready_for_summary",
+                    "date": "2026-07-05",
+                    "account": "fixture@example.invalid",
+                    "window": "1d",
+                    "scan_limit": 10,
+                    "raw_count": 1,
+                    "possibly_truncated": False,
+                    "items": [
+                        {
+                            "uid": "77",
+                            "date": "Sun, 05 Jul 2026 08:00:00 +0800",
+                            "from": "Fixture Sender <sender@example.invalid>",
+                            "subject": "Fixture actionable mail",
+                            "snippet": "A fixture email that should become a summary.",
+                            "has_attachments": False,
+                            "email_type": "personal",
+                            "links": [],
+                            "evidence": [],
+                            "risks": ["snippet_only"],
+                            "flags": [],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            summary_text = (
+                "# Podsum Email Summary 2026-07-05\n\n"
+                "## key takeaway\n\n"
+                "仅基于邮件摘要：fixture item should be reviewed.\n\n"
+                "## 跟踪话题\n\n"
+                "本次没有命中 topic.md 中的跟踪话题。\n\n"
+                "## 来源索引\n\n"
+                "- UID=77 | From=Fixture Sender <sender@example.invalid> | "
+                "Subject=Fixture actionable mail | Date=Sun, 05 Jul 2026 08:00:00 +0800 | "
+                "`email://2026-07-05/77`\n"
+            )
+            (reports / "email-scan-2026-07-05.json").write_text(scan_text, encoding="utf-8")
+            (reports / "email-summary-2026-07-05.md").write_text(summary_text, encoding="utf-8")
+            need_store.save_need_store(
+                reports,
+                {
+                    "object_type": "email_need_store",
+                    "object_version": "0.1",
+                    "needs": [
+                        {
+                            "need_id": "need-low",
+                            "status": "open",
+                            "urgency": "low",
+                            "topic_id": "topic-b",
+                            "source_brief_id": "brief-2026-07-05",
+                            "claim_or_question": "Low urgency question",
+                            "why_needed": "Need a better source.",
+                            "known_source_refs": ["email://2026-07-05/77"],
+                            "needed_evidence": ["public_link"],
+                            "created_at": "2026-07-05T08:00:00+0800",
+                            "last_checked_at": "2026-07-05T08:00:00+0800",
+                            "resolved_by": [],
+                            "response_policy": "emit_need_reference_only",
+                            "audit_trail": [],
+                        },
+                        {
+                            "need_id": "need-high",
+                            "status": "open",
+                            "urgency": "high",
+                            "topic_id": "topic-a",
+                            "source_brief_id": "brief-2026-07-05",
+                            "claim_or_question": "High urgency question",
+                            "why_needed": "Need a stronger source.",
+                            "known_source_refs": ["email:77"],
+                            "needed_evidence": ["full_body"],
+                            "created_at": "2026-07-05T08:00:00+0800",
+                            "last_checked_at": "2026-07-05T08:00:00+0800",
+                            "resolved_by": [],
+                            "response_policy": "emit_need_reference_only",
+                            "audit_trail": [],
+                        },
+                    ],
+                },
+            )
+            config = email_workbench.WorkbenchConfig(
+                root=tmp_path / "downloads",
+                date="2026-07-05",
+                host="127.0.0.1",
+                port=0,
+                policy_file=ROOT / "outputs" / "email_link_policy.md",
+                topic_file=ROOT / "outputs" / "topic.md",
+            )
+            server, thread, base_url = start_workbench(config)
+            try:
+                home = get_text(base_url, "/")
+                needs = get_json(base_url, "/api/needs")
+                post_json(
+                    base_url,
+                    "/api/review",
+                    {"brief_status": "approved", "brief_override_markdown": summary_text},
+                )
+                checklist = get_json(base_url, "/api/checklist")
+                closed = post_json(base_url, "/api/needs/need-high/action", {"action": "close"})
+                reloaded = get_json(base_url, "/api/needs")
+            finally:
+                stop_workbench(server, thread)
+
+            self.assertIn('data-view="needs"', home)
+            self.assertIn("claim_or_question", email_workbench.APP_JS)
+            self.assertIn("data-need-ref-uid", email_workbench.APP_JS)
+            self.assertEqual(needs["counts"]["open"], 2)
+            self.assertEqual([item["need_id"] for item in needs["needs"]], ["need-high", "need-low"])
+            self.assertTrue(checklist["delivery_ready"])
+            self.assertEqual(closed["counts"]["closed"], 1)
+            self.assertEqual(reloaded["counts"]["closed"], 1)
+            persisted = need_store.load_need_store(reports)
+            closed_need = [item for item in persisted["needs"] if item["need_id"] == "need-high"][0]
+            self.assertEqual(closed_need["status"], "closed")
+            self.assertEqual(closed_need["audit_trail"][-1]["actor"], "Workbench")
 
     def test_email_workbench_rejects_invalid_policy_without_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1022,9 +1598,95 @@ class PodsumCliTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             report = tmp_path / "downloads" / "EmailReports" / "email-summary-2026-07-05.md"
             copied_scan = tmp_path / "downloads" / "EmailReports" / "email-scan-2026-07-05.json"
+            needs_path = tmp_path / "downloads" / "EmailReports" / "email-needs.json"
             self.assertTrue(report.exists())
             self.assertTrue(copied_scan.exists())
-            self.assertIn("dry-run: Podsum local summary engine", report.read_text(encoding="utf-8"))
+            self.assertTrue(needs_path.exists())
+            needs = json.loads(needs_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(needs["needs"]), 1)
+            report_text = report.read_text(encoding="utf-8")
+            self.assertIn("dry-run: Podsum local summary engine", report_text)
+            self.assertIn(needs["needs"][0]["need_id"], report_text)
+
+    def test_email_run_graph_import_guard_is_actionable_when_langgraph_missing(self) -> None:
+        if email_graph.langgraph_available():
+            self.skipTest("langgraph is installed")
+
+        with self.assertRaisesRegex(RuntimeError, "LangGraph is required for EmailRunGraph"):
+            email_graph.build_in_memory_email_run_graph()
+
+    def test_email_run_graph_fixture_only_run_produces_lightweight_state(self) -> None:
+        if not email_graph.langgraph_available():
+            self.skipTest("langgraph is not installed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            artifact_dir = tmp_path / "downloads" / "EmailReports"
+            scan_file = tmp_path / "email-scan.json"
+            scan = {
+                "date": "2026-07-05",
+                "account": "fixture@example.invalid",
+                "window": "1d",
+                "scan_limit": 300,
+                "raw_count": 1,
+                "possibly_truncated": False,
+                "items": [
+                    {
+                        "uid": "42",
+                        "date": "Sun, 05 Jul 2026 08:00:00 +0800",
+                        "from": "Fixture Sender <sender@example.invalid>",
+                        "subject": "Fixture actionable mail",
+                        "snippet": "A fixture email that should become a graph summary.",
+                        "has_attachments": False,
+                        "flags": [],
+                    }
+                ],
+            }
+            scan_file.write_text(json.dumps(scan), encoding="utf-8")
+            policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+            topic_map = email_summary.load_topic_map(ROOT / "outputs" / "topic.md")
+            context = email_graph.build_email_run_context(
+                policy,
+                topic_map,
+                None,
+                False,
+                email_summary.fetch_link_context,
+                "dry-run: Podsum local summary engine; no external summary engine called",
+                {},
+            )
+            initial_state = email_graph.initial_email_run_state(
+                "graph-fixture",
+                "fixture@example.invalid",
+                "2026-07-05",
+                artifact_dir,
+                scan_file,
+            )
+            app = email_graph.build_in_memory_email_run_graph()
+            config = {"configurable": {"thread_id": "graph-fixture", "email_run_context": context}}
+
+            final_state = app.invoke(initial_state, config)
+
+            copied_scan = artifact_dir / "email-scan-2026-07-05.json"
+            report = artifact_dir / "email-summary-2026-07-05.md"
+            needs_path = artifact_dir / "email-needs.json"
+            self.assertTrue(copied_scan.exists())
+            self.assertTrue(report.exists())
+            self.assertTrue(needs_path.exists())
+            self.assertEqual(final_state["evidence_pack_path"], str(copied_scan))
+            self.assertEqual(final_state["brief_path"], str(report))
+            self.assertEqual(final_state["need_store_path"], str(needs_path))
+            self.assertNotIn("graph summary", json.dumps(final_state, ensure_ascii=False))
+            checkpoint_state = app.get_state(config).values
+            self.assertNotIn("graph summary", json.dumps(checkpoint_state, ensure_ascii=False))
+            scan_before = copied_scan.read_text(encoding="utf-8")
+            needs_before = needs_path.read_text(encoding="utf-8")
+            report_before = report.read_text(encoding="utf-8")
+            email_graph.persist_evidence_pack(final_state, config)
+            email_graph.persist_needs(final_state, config)
+            email_graph.persist_brief(final_state, config)
+            self.assertEqual(scan_before, copied_scan.read_text(encoding="utf-8"))
+            self.assertEqual(needs_before, needs_path.read_text(encoding="utf-8"))
+            self.assertEqual(report_before, report.read_text(encoding="utf-8"))
 
     def test_email_summary_default_engine_does_not_call_hermes_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

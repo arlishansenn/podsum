@@ -11,7 +11,7 @@ Email Workbench 是 Podsum 的本地手动审核台。它读取已有 Email Summ
 启动命令：
 
 ```sh
-/usr/bin/python3 outputs/podsum.py email-workbench \
+"$PODSUM_PYTHON" outputs/podsum.py email-workbench \
   --root ~/Podcasts/AutoDownloads \
   --date 2026-07-05 \
   --host 127.0.0.1 \

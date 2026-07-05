@@ -18,6 +18,10 @@ from pathlib import Path
 from typing import Any
 
 import podsum_email_summary as email_summary
+import podsum_runtime
+from email import need_store
+from email.io import atomic_write_json
+from email.schemas import EvidenceNeed, EvidenceNeedEvent, transition_need
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -28,6 +32,9 @@ DEFAULT_TOPIC_FILE = email_summary.DEFAULT_TOPIC_FILE
 MAX_POST_BYTES = 1024 * 1024
 BRIEF_STATUSES = {"draft", "needs_revision", "approved"}
 REVIEW_MARK_KEYS = {"ignore", "important", "type_override", "needs_link_review"}
+NEED_STATUSES = ("open", "watching", "blocked", "stale", "fulfilled_now", "superseded", "closed")
+NEED_URGENCY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+NEED_ACTION_EVENTS = {"close": "close", "stale": "mark_stale"}
 
 
 def today_string() -> str:
@@ -86,10 +93,6 @@ def atomic_write_text(path: Path, text: str) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
-
-
-def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
-    atomic_write_text(path, json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 
 
 def load_review(config: WorkbenchConfig) -> dict[str, Any]:
@@ -218,6 +221,59 @@ def topic_payload(config: WorkbenchConfig) -> dict[str, Any]:
             "topic_map": None,
             "error": str(exc),
         }
+
+
+def need_counts(needs: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {status: 0 for status in NEED_STATUSES}
+    for need in needs:
+        status = str(need.get("status") or "")
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def need_sort_key(need: dict[str, Any]) -> tuple[int, int, str]:
+    open_rank = 0 if need.get("status") == "open" else 1
+    urgency_rank = NEED_URGENCY_ORDER.get(str(need.get("urgency") or ""), 99)
+    return (open_rank, urgency_rank, str(need.get("need_id") or ""))
+
+
+def needs_payload(config: WorkbenchConfig) -> dict[str, Any]:
+    store = need_store.load_need_store(config.reports_dir)
+    needs = sorted(store["needs"], key=need_sort_key)
+    return {
+        "store": {
+            "object_type": store["object_type"],
+            "object_version": store["object_version"],
+            "needs": needs,
+        },
+        "needs": needs,
+        "counts": need_counts(needs),
+        "path": str(need_store.need_store_path(config.reports_dir)),
+    }
+
+
+def update_need_action(config: WorkbenchConfig, need_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    action = str(body.get("action") or "")
+    event_type = NEED_ACTION_EVENTS.get(action)
+    if event_type is None:
+        raise ValueError("action must be close or stale")
+    store = need_store.load_need_store(config.reports_dir)
+    matching = [item for item in store["needs"] if item.get("need_id") == need_id]
+    if not matching:
+        raise KeyError("need not found")
+    reason = str(body.get("reason") or f"Manual {action} from Workbench")
+    event = EvidenceNeedEvent(
+        event_type=event_type,
+        at=now_stamp(),
+        actor="Workbench",
+        reason=reason,
+        added_evidence_refs=(),
+        resolved_by=(),
+    )
+    next_need = transition_need(EvidenceNeed.from_dict(matching[0]), event)
+    next_store = need_store.replace_need(store, next_need)
+    need_store.save_need_store(config.reports_dir, next_store)
+    return needs_payload(config)
 
 
 def load_evidence_pack(config: WorkbenchConfig) -> dict[str, Any]:
@@ -369,7 +425,7 @@ def shell_join(parts: list[str]) -> str:
 
 def commands_payload(config: WorkbenchConfig) -> dict[str, Any]:
     podsum = Path(__file__).with_name("podsum.py")
-    python = "/usr/bin/python3"
+    python = podsum_runtime.podsum_python()
     scan = str(config.scan_path)
     root = str(config.root)
     policy_file = str(config.policy_file)
@@ -452,6 +508,7 @@ def commands_payload(config: WorkbenchConfig) -> dict[str, Any]:
         "notes": [
             "Workbench only displays commands; it never executes IMAP, Hermes summary, send, or launchd actions.",
             "EmailIntelBrief uses Podsum's local summary engine by default; Hermes is not the email summary engine.",
+            f"Generated commands use Podsum Python: {python}",
             "Run manual_delivery_after_approval only after ReviewChecklistPanel passes and the Brief is approved.",
         ],
     }
@@ -579,6 +636,8 @@ def make_handler(config: WorkbenchConfig) -> type[BaseHTTPRequestHandler]:
                     json_response(self, 200, {"ok": True, **topic_payload(config)})
                 elif path == "/api/checklist":
                     json_response(self, 200, {"ok": True, **checklist_payload(config)})
+                elif path == "/api/needs":
+                    json_response(self, 200, {"ok": True, **needs_payload(config)})
                 elif path == "/api/commands":
                     json_response(self, 200, {"ok": True, **commands_payload(config)})
                 else:
@@ -605,6 +664,9 @@ def make_handler(config: WorkbenchConfig) -> type[BaseHTTPRequestHandler]:
                     markdown = str(body.get("markdown") or "")
                     topic_map = save_topics(config, markdown)
                     json_response(self, 200, {"ok": True, "topic_map": topic_map})
+                elif path.startswith("/api/needs/") and path.endswith("/action"):
+                    need_id = urllib.parse.unquote(path.removeprefix("/api/needs/").removesuffix("/action").strip("/"))
+                    json_response(self, 200, {"ok": True, **update_need_action(config, need_id, body)})
                 else:
                     json_response(self, 404, {"ok": False, "error": "not found"})
             except Exception as exc:
@@ -672,6 +734,7 @@ INDEX_HTML = """<!doctype html>
       <button class="nav-button" data-view="policy">EmailEvidencePolicy</button>
       <button class="nav-button active" data-view="evidence">EmailEvidencePack</button>
       <button class="nav-button" data-view="brief">EmailIntelBrief</button>
+      <button class="nav-button" data-view="needs">Needs</button>
     </nav>
     <section class="workspace">
       <section id="topicsView" class="view">
@@ -712,6 +775,24 @@ INDEX_HTML = """<!doctype html>
           <div id="emailList" class="email-list"></div>
           <article id="emailDetail" class="detail"></article>
         </div>
+      </section>
+      <section id="needsView" class="view">
+        <div class="section-head">
+          <h2>EvidenceNeedQueue</h2>
+          <div class="filters">
+            <select id="needStatusFilter"></select>
+            <select id="needUrgencyFilter"></select>
+            <select id="needTopicFilter"></select>
+            <select id="needSort">
+              <option value="urgency">sort: urgency</option>
+              <option value="status">sort: status</option>
+              <option value="topic_id">sort: topic</option>
+            </select>
+          </div>
+        </div>
+        <p class="notice">Needs are read from email-needs.json. Open needs are highlighted but do not block approval or delivery.</p>
+        <div id="needStats" class="stats"></div>
+        <div id="needList" class="need-list"></div>
       </section>
       <section id="briefView" class="view">
         <div class="section-head">
@@ -862,11 +943,32 @@ p { margin: 0; }
   gap: 8px;
   margin-bottom: 12px;
 }
-.stat, .panel, .detail, .email-row, .brief-rendered, .policy-card, .topic-card {
+.stat, .panel, .detail, .email-row, .brief-rendered, .policy-card, .topic-card, .need-card {
   background: var(--panel);
   border: 1px solid var(--line);
 }
 .stat, .policy-card, .topic-card { padding: 10px; }
+.need-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.need-card {
+  padding: 10px;
+}
+.need-card.open {
+  border-color: var(--warn);
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+.need-card h3 {
+  margin-top: 0;
+}
+.need-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
 .stat strong { display: block; font-size: 18px; }
 .policy-card strong, .topic-card strong { display: block; margin-bottom: 6px; }
 .topic-guide {
@@ -989,8 +1091,10 @@ const state = {
   topics: null,
   checklist: null,
   commands: null,
+  needs: null,
   selectedUid: null,
   filters: { type: "", risk: "", attachments: false, evidence: false },
+  needFilters: { status: "", urgency: "", topic: "", sort: "urgency" },
 };
 
 async function api(path, options = {}) {
@@ -1291,6 +1395,98 @@ function renderBrief() {
   }
 }
 
+function needRefUid(ref) {
+  const text = String(ref || "");
+  const uriMatch = text.match(/email:\/\/[^/]+\/([^\s`]+)/);
+  if (uriMatch) return uriMatch[1];
+  const refMatch = text.match(/^email:([^\s`]+)$/);
+  return refMatch ? refMatch[1] : "";
+}
+
+function filteredNeeds() {
+  const needs = state.needs?.needs || [];
+  const urgencyOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+  const statusOrder = { open: 0, watching: 1, blocked: 2, stale: 3, fulfilled_now: 4, superseded: 5, closed: 6 };
+  return needs.filter((need) => {
+    if (state.needFilters.status && need.status !== state.needFilters.status) return false;
+    if (state.needFilters.urgency && need.urgency !== state.needFilters.urgency) return false;
+    if (state.needFilters.topic && need.topic_id !== state.needFilters.topic) return false;
+    return true;
+  }).sort((left, right) => {
+    if (state.needFilters.sort === "status") {
+      return (statusOrder[left.status] ?? 99) - (statusOrder[right.status] ?? 99) || (urgencyOrder[left.urgency] ?? 99) - (urgencyOrder[right.urgency] ?? 99);
+    }
+    if (state.needFilters.sort === "topic_id") {
+      return String(left.topic_id || "").localeCompare(String(right.topic_id || "")) || (urgencyOrder[left.urgency] ?? 99) - (urgencyOrder[right.urgency] ?? 99);
+    }
+    return (left.status === "open" ? 0 : 1) - (right.status === "open" ? 0 : 1) || (urgencyOrder[left.urgency] ?? 99) - (urgencyOrder[right.urgency] ?? 99);
+  });
+}
+
+function renderNeeds() {
+  const needs = state.needs?.needs || [];
+  const counts = state.needs?.counts || {};
+  fillFilter("needStatusFilter", "", "all statuses", [...new Set(needs.map((need) => need.status).filter(Boolean))]);
+  fillFilter("needUrgencyFilter", "", "all urgencies", [...new Set(needs.map((need) => need.urgency).filter(Boolean))]);
+  fillFilter("needTopicFilter", "", "all topics", [...new Set(needs.map((need) => need.topic_id).filter(Boolean))]);
+  document.getElementById("needSort").value = state.needFilters.sort;
+  document.getElementById("needStats").innerHTML = [
+    `<div class="stat"><strong>${needs.length}</strong><span>total needs</span></div>`,
+    `<div class="stat"><strong>${counts.open || 0}</strong><span>open</span></div>`,
+    `<div class="stat"><strong>${counts.watching || 0}</strong><span>watching</span></div>`,
+    `<div class="stat"><strong>${counts.closed || 0}</strong><span>closed</span></div>`,
+  ].join("");
+  document.getElementById("needList").innerHTML = filteredNeeds().map((need) => {
+    const refs = need.known_source_refs || [];
+    const refButtons = refs.map((ref) => {
+      const uid = needRefUid(ref);
+      return uid
+        ? `<button data-need-ref-uid="${escapeHtml(uid)}">Evidence UID ${escapeHtml(uid)}</button>`
+        : `<span class="badge">${escapeHtml(ref)}</span>`;
+    }).join(" ");
+    const auditRows = (need.audit_trail || []).map((entry) => `<tr>
+      <td>${escapeHtml(entry.at)}</td><td>${escapeHtml(entry.actor)}</td><td>${escapeHtml(entry.event_type)}</td><td>${escapeHtml(entry.old_status)} → ${escapeHtml(entry.new_status)}</td><td>${escapeHtml(entry.reason)}</td>
+    </tr>`).join("");
+    const canAct = !["closed", "superseded"].includes(need.status);
+    return `<article class="need-card ${need.status === "open" ? "open" : ""}" data-testid="need-card" data-need-id="${escapeHtml(need.need_id)}">
+      <h3>${escapeHtml(need.need_id)}</h3>
+      <p>${badge(need.status, need.status === "open" ? "warn" : need.status === "closed" ? "good" : "")} ${badge(need.urgency, need.urgency === "critical" || need.urgency === "high" ? "bad" : "")} ${badge(need.topic_id || "no topic", "usable")}</p>
+      <p><strong>claim_or_question</strong></p>
+      <p>${escapeHtml(need.claim_or_question || "")}</p>
+      <p class="meta">why_needed: ${escapeHtml(need.why_needed || "")}</p>
+      <p class="meta">needed_evidence: ${escapeHtml((need.needed_evidence || []).join(", "))}</p>
+      <div class="need-actions">
+        <button data-need-brief="${escapeHtml(need.source_brief_id || "")}">Source brief</button>
+        ${refButtons || "<span class='meta'>No known evidence refs.</span>"}
+        ${canAct ? `<button data-need-action="close" data-need-id="${escapeHtml(need.need_id)}">Close</button><button data-need-action="stale" data-need-id="${escapeHtml(need.need_id)}">Mark stale</button>` : ""}
+      </div>
+      <details><summary>Audit trail (${escapeHtml((need.audit_trail || []).length)})</summary>
+        <table><thead><tr><th>at</th><th>actor</th><th>event</th><th>status</th><th>reason</th></tr></thead><tbody>${auditRows || `<tr><td colspan="5">No audit events.</td></tr>`}</tbody></table>
+      </details>
+    </article>`;
+  }).join("") || `<div class="need-card">No evidence needs.</div>`;
+  for (const button of document.querySelectorAll("[data-need-ref-uid]")) {
+    button.addEventListener("click", () => {
+      state.selectedUid = button.dataset.needRefUid;
+      showView("evidence");
+      renderEvidence();
+    });
+  }
+  for (const button of document.querySelectorAll("[data-need-brief]")) {
+    button.addEventListener("click", () => showView("brief"));
+  }
+  for (const button of document.querySelectorAll("[data-need-action]")) {
+    button.addEventListener("click", async () => {
+      await api(`/api/needs/${encodeURIComponent(button.dataset.needId)}/action`, {
+        method: "POST",
+        body: JSON.stringify({ action: button.dataset.needAction }),
+      });
+      await refresh();
+      showView("needs");
+    });
+  }
+}
+
 function renderPolicy() {
   document.getElementById("policyEditor").value = state.policy?.markdown || "";
   document.getElementById("policyStatus").textContent = state.policy?.error
@@ -1400,6 +1596,7 @@ function showView(view) {
   document.getElementById("evidenceView").classList.toggle("active", view === "evidence");
   document.getElementById("policyView").classList.toggle("active", view === "policy");
   document.getElementById("briefView").classList.toggle("active", view === "brief");
+  document.getElementById("needsView").classList.toggle("active", view === "needs");
 }
 
 async function saveReview(update) {
@@ -1408,7 +1605,7 @@ async function saveReview(update) {
 }
 
 async function refresh() {
-  const [context, evidence, brief, policy, topics, checklist, commands] = await Promise.all([
+  const [context, evidence, brief, policy, topics, checklist, commands, needs] = await Promise.all([
     api("/api/context"),
     api("/api/evidence-pack"),
     api("/api/intel-brief"),
@@ -1416,13 +1613,15 @@ async function refresh() {
     api("/api/topics"),
     api("/api/checklist"),
     api("/api/commands"),
+    api("/api/needs"),
   ]);
-  Object.assign(state, { context, evidence, brief, policy, topics, checklist, commands });
+  Object.assign(state, { context, evidence, brief, policy, topics, checklist, commands, needs });
   renderContext();
   renderEvidence();
   renderBrief();
   renderPolicy();
   renderTopics();
+  renderNeeds();
   renderChecklist();
   renderCommands();
 }
@@ -1446,6 +1645,22 @@ function bindEvents() {
   document.getElementById("evidenceFilter").addEventListener("change", (event) => {
     state.filters.evidence = event.target.checked;
     renderEvidence();
+  });
+  document.getElementById("needStatusFilter").addEventListener("change", (event) => {
+    state.needFilters.status = event.target.value;
+    renderNeeds();
+  });
+  document.getElementById("needUrgencyFilter").addEventListener("change", (event) => {
+    state.needFilters.urgency = event.target.value;
+    renderNeeds();
+  });
+  document.getElementById("needTopicFilter").addEventListener("change", (event) => {
+    state.needFilters.topic = event.target.value;
+    renderNeeds();
+  });
+  document.getElementById("needSort").addEventListener("change", (event) => {
+    state.needFilters.sort = event.target.value;
+    renderNeeds();
   });
   document.getElementById("saveBrief").addEventListener("click", () => {
     saveReview({ brief_override_markdown: document.getElementById("briefEditor").value });

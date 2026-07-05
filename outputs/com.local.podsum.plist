@@ -8,7 +8,7 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/python3</string>
+    <string>/Users/admin/Library/Application Support/Podsum/.venv/bin/python</string>
     <string>/Users/admin/Library/Application Support/Podsum/outputs/podsum.py</string>
     <string>run-once</string>
     <string>--cleanup</string>

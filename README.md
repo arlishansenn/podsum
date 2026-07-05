@@ -41,8 +41,19 @@ active Hermes profile with:
 The installer preserves the existing Hermes category paths so references inside
 the skills remain valid.
 
+## Python Runtime
+
+Podsum should run from its application virtual environment rather than the OS Python.
+Set `PODSUM_PYTHON` to the virtual-environment interpreter before running manual commands:
+
+```bash
+export PODSUM_PYTHON="$HOME/Library/Application Support/Podsum/.venv/bin/python"
+```
+
+Linux deployments can point the same variable at their service venv, for example `/opt/podsum/.venv/bin/python`.
+
 ## Test
 
 ```bash
-/usr/bin/python3 -m unittest discover -s tests -v
+"$PODSUM_PYTHON" -m unittest discover -s tests -v
 ```

@@ -113,7 +113,7 @@ plans/podsum-email-workbench-gui-spec.md
 新增手动启动命令：
 
 ```sh
-/usr/bin/python3 outputs/podsum.py email-workbench \
+"$PODSUM_PYTHON" outputs/podsum.py email-workbench \
   --root ~/Podcasts/AutoDownloads \
   --date 2026-07-05 \
   --host 127.0.0.1 \

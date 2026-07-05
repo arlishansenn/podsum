@@ -8,7 +8,7 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/python3</string>
+    <string>/Users/admin/Library/Application Support/Podsum/.venv/bin/python</string>
     <string>/Users/admin/Library/Application Support/Podsum/outputs/podcast_downloader.py</string>
     <string>--feeds-only</string>
     <string>--skip-download</string>

@@ -42,10 +42,28 @@ State:
 /Users/admin/Documents/Codex/podsum/outputs/feeds.json
 ```
 
+## Python Runtime
+
+Podsum is a Python system application and should run from its application virtual environment, not the OS Python.
+
+macOS default:
+
+```sh
+export PODSUM_PYTHON="$HOME/Library/Application Support/Podsum/.venv/bin/python"
+```
+
+Linux example:
+
+```sh
+export PODSUM_PYTHON="/opt/podsum/.venv/bin/python"
+```
+
+`PODSUM_PYTHON` is used by generated commands and examples. launchd/systemd jobs should still start Podsum with the virtual-environment Python directly, using an absolute path.
+
 Check active feeds:
 
 ```sh
-/usr/bin/python3 /Users/admin/Documents/Codex/podsum/outputs/podcast_downloader.py --list
+"$PODSUM_PYTHON" /Users/admin/Documents/Codex/podsum/outputs/podcast_downloader.py --list
 ```
 
 ## Scheduled Job
@@ -55,7 +73,7 @@ Podsum has one LaunchAgent:
 ```text
 LaunchAgent: com.local.podsum
 Schedule: daily at 08:00
-Command: /usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" run-once --cleanup --audio-retention-days 14 --transcript-retention-days 90 --untranscribed-audio-retention-days 30 --bundle-retention-days 90
+Command: /Users/admin/Library/Application\ Support/Podsum/.venv/bin/python "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" run-once --cleanup --audio-retention-days 14 --transcript-retention-days 90 --untranscribed-audio-retention-days 30 --bundle-retention-days 90
 ```
 
 The runner keeps episode-level status in one state file. It records `downloaded`, `transcribed`, `sent`, and failure states such as `failed_download`, `failed_transcribe`, and `failed_send`. Each completed stage writes state immediately, so a later run can resume from the failed or incomplete stage.
@@ -111,7 +129,7 @@ Podsum does not delete an audio file that has a matching Markdown transcript unt
 Check current state:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" status
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" status
 ```
 
 ## Manual Commands
@@ -119,55 +137,55 @@ Check current state:
 Download only:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" download
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" download
 ```
 
 Run the full pipeline:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" run-once --cleanup
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" run-once --cleanup
 ```
 
 Run the full podcast pipeline and then generate the email summary:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" run-once --cleanup --email-summary
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" run-once --cleanup --email-summary
 ```
 
 Transcribe ready downloads only:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" transcribe
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" transcribe
 ```
 
 Send ready transcripts only:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" send
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" send
 ```
 
 Retry failed stages:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" retry-failed
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" retry-failed
 ```
 
 Run the email summary only:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary
 ```
 
 Real Gmail/IMAP reads require an explicit confirmation flag:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --allow-imap-read
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --allow-imap-read
 ```
 
 For the integrated runner, use:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" run-once --cleanup --email-summary --email-allow-imap-read
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" run-once --cleanup --email-summary --email-allow-imap-read
 ```
 
 Email credentials are read from environment variables first, then Podsum's own
@@ -202,8 +220,8 @@ environment overrides, not as a reason to depend on Hermes or OpenClaw config.
 For migration testing without touching Gmail/IMAP:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --scan-file /path/to/email-scan.json --dry-run --no-send
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --eml-dir /path/to/sanitized-eml-fixtures --dry-run --no-send
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --scan-file /path/to/email-scan.json --dry-run --no-send
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --eml-dir /path/to/sanitized-eml-fixtures --dry-run --no-send
 ```
 
 If both `--scan-file` and `--eml-dir` are provided, `--scan-file` wins. If
@@ -224,7 +242,7 @@ Email summary verification has three levels:
 Example real-scan validation:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --scan-file "$HOME/Podcasts/AutoDownloads/EmailReports/email-scan-YYYY-MM-DD.json" --summary-engine podsum --email-topic-file "/Users/admin/Library/Application Support/Podsum/outputs/topic.md" --no-send
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --scan-file "$HOME/Podcasts/AutoDownloads/EmailReports/email-scan-YYYY-MM-DD.json" --summary-engine podsum --email-topic-file "/Users/admin/Library/Application Support/Podsum/outputs/topic.md" --no-send
 ```
 
 Email summary is moving toward a compact VIS-style Workbench model:
@@ -283,15 +301,15 @@ artifacts, writes `EmailReports/email-review-YYYY-MM-DD.json` for human review
 state, and does not read IMAP, call Hermes, send, or modify launchd:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-workbench --root "$HOME/Podcasts/AutoDownloads" --date YYYY-MM-DD --host 127.0.0.1 --port 8765 --topic-file "/Users/admin/Library/Application Support/Podsum/outputs/topic.md"
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-workbench --root "$HOME/Podcasts/AutoDownloads" --date YYYY-MM-DD --host 127.0.0.1 --port 8765 --topic-file "/Users/admin/Library/Application Support/Podsum/outputs/topic.md"
 ```
 
 By default Podsum extracts links but does not fetch external pages. To enrich
 public article links explicitly:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --allow-imap-read --summary-engine podsum --enrich-links
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --scan-file "$HOME/Podcasts/AutoDownloads/EmailReports/email-scan-YYYY-MM-DD.json" --summary-engine podsum --email-topic-file "/Users/admin/Library/Application Support/Podsum/outputs/topic.md" --enrich-links --no-send
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --allow-imap-read --summary-engine podsum --enrich-links
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" email-summary --scan-file "$HOME/Podcasts/AutoDownloads/EmailReports/email-scan-YYYY-MM-DD.json" --summary-engine podsum --email-topic-file "/Users/admin/Library/Application Support/Podsum/outputs/topic.md" --enrich-links --no-send
 ```
 
 `--enrich-links` only fetches public `http`/`https` HTML links allowed by
@@ -302,13 +320,13 @@ execute JavaScript or use a logged-in browser session.
 Generate sanitized fixtures from local raw `.eml` files:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum_email_fixture_tool.py" redact --input-dir /tmp/raw-eml --output-dir /tmp/sanitized-eml
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum_email_fixture_tool.py" redact --input-dir /tmp/raw-eml --output-dir /tmp/sanitized-eml
 ```
 
 Capture a small Gmail/IMAP sample directly into sanitized fixtures:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum_email_fixture_tool.py" capture --output-dir /tmp/sanitized-eml --recent-days 7 --limit 20 --allow-imap-read
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum_email_fixture_tool.py" capture --output-dir /tmp/sanitized-eml --recent-days 7 --limit 20 --allow-imap-read
 ```
 
 Review sanitized fixtures manually before committing them. Raw Gmail `.eml`
@@ -318,7 +336,7 @@ must not be committed.
 Migrate old state files:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" migrate-state
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" migrate-state
 ```
 
 ## Transcription Model
@@ -332,7 +350,7 @@ mlx-community/whisper-tiny-mlx
 Use a different MLX Whisper model:
 
 ```sh
-/usr/bin/python3 "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" transcribe --transcribe-model mlx-community/whisper-small-mlx
+"$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" transcribe --transcribe-model mlx-community/whisper-small-mlx
 ```
 
 Model choices:
@@ -377,7 +395,7 @@ It is manually invoked and is not part of `com.local.podsum`:
 
 ```sh
 cd /Users/admin/Documents/Codex/podsum/outputs
-/usr/bin/python3 -m transcript_cleaner input.md --output-dir output
+"$PODSUM_PYTHON" -m transcript_cleaner input.md --output-dir output
 ```
 
 See `outputs/transcript_cleaner/README.md` for its repetition model and report format.

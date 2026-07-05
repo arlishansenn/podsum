@@ -110,7 +110,7 @@ Email Summary 保留三个核心可视化工作对象。另有一个质量门禁
 - fake Hermes 验证摘要和发送路径。
 - 缺少 IMAP 凭据时给出明确错误，不发送半成品。
 - 不加 `--email-summary` 时，`run-once` 行为与现在一致。
-- 完整运行 `/usr/bin/python3 -m unittest discover -s tests -v`。
+- 完整运行 `"$PODSUM_PYTHON" -m unittest discover -s tests -v`。
 
 ## 明确不做
 
