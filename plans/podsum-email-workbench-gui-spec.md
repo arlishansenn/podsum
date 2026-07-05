@@ -34,13 +34,14 @@ ssh -L 8765:127.0.0.1:8765 macmini
 
 ```mermaid
 flowchart LR
-  P["EmailPolicyPanel<br/>核心对象：邮件证据策略台"] --> E["EmailEvidencePack<br/>核心对象"]
+  P["EmailEvidencePolicy<br/>核心对象：邮件证据策略"] --> E["EmailEvidencePack<br/>核心对象"]
   E --> B["EmailIntelBrief<br/>核心对象"]
   B --> R["ReviewChecklistPanel<br/>质量门禁面板"]
   R --> X["EPUB / Delivery<br/>人工批准后的动作"]
 ```
 
-`EmailPolicyPanel` 进入核心对象导航；`ReviewChecklistPanel` 是附属门禁面板。
+`EmailEvidencePolicy` 进入核心对象导航；`EmailPolicyPanel` 是它的 GUI
+编辑面板。`ReviewChecklistPanel` 是附属门禁面板。
 
 ## Layout
 
@@ -49,15 +50,45 @@ flowchart LR
 | Date / account / artifact status / local server mode               |
 +----------------------+---------------------------------------------+
 | Core object nav      | Main work area                              |
-| - PolicyPanel        | - PolicyPanel view                          |
+| - EvidencePolicy     | - EmailPolicyPanel view                     |
 | - EvidencePack       | - EvidencePack view                         |
 | - IntelBrief         | - IntelBrief view                           |
 +----------------------+----------------------+----------------------+
-| Agent progress / commands                  | Policy / Checklist    |
+| Agent progress / commands                  | Checklist / Commands  |
 +--------------------------------------------+----------------------+
 ```
 
 第一版用单页 HTML/CSS/JS 实现。左侧导航三个核心对象；右侧只保留 ReviewChecklistPanel 和命令预览。
+
+## EmailEvidencePolicy View
+
+输入文件：
+
+```text
+outputs/email_link_policy.md
+```
+
+GUI 面板名：
+
+```text
+EmailPolicyPanel
+```
+
+内部控制区：
+
+- Type Rules：展示 email type、匹配条件和 summary focus。
+- Link Strategy：展示哪些类型允许抓公开链接，以及每封/全局抓取上限。
+- Snippet-only Types：展示只基于邮件摘要处理的类型，避免误以为有完整正文。
+- Safety / Skip Rules：展示 tracking、unsubscribe、login、private URL 等跳过规则。
+- Spec Editor：编辑 Markdown + fenced JSON；保存前必须校验 JSON。
+
+用户操作：
+
+- 编辑 email type 规则、`fetch_links`、skip patterns、limits。
+- 保存 policy。保存失败时不覆盖原文件。
+- 查看“修改 policy 不会自动重跑”的提示和后续 CLI 命令。
+
+它控制未来 EvidencePack 如何生成，但不直接改写已有 scan JSON。
 
 ## EmailEvidencePack View
 
@@ -70,9 +101,10 @@ EmailReports/email-scan-YYYY-MM-DD.json
 展示内容：
 
 - scan metadata：date、account、window、scan_limit、raw_count、possibly_truncated。
+- Evidence Health：strong/usable/weak/failed/skipped。
 - 分布：email_type、risks、attachments、links/evidence。
 - 邮件列表：UID、From、Subject、Date、email_type、risk badges。
-- 邮件详情：snippet、links、evidence、risks、attachments。
+- 邮件详情：Base Evidence、Link Decision、Link Evidence、Risks。
 - evidence 至少包含 `type=email_snippet` 的邮件自身证据；`type=public_link`
   是链接补全后的增强证据。
 
@@ -116,25 +148,6 @@ EmailReports/email-summary-YYYY-MM-DD.md
 - 点击 UID 回到 EvidencePack 对应邮件。
 
 第一版不覆盖原始 summary Markdown；人工编辑内容只写入 sidecar 的 `brief_override_markdown`。
-
-## EmailPolicyPanel
-
-输入文件：
-
-```text
-outputs/email_link_policy.md
-```
-
-职责：
-
-- 展示 policy Markdown。
-- 解析 fenced JSON。
-- 编辑 email type 规则、`fetch_links`、skip patterns、limits。
-- 保存前校验 JSON。
-- 保存失败时不覆盖原文件。
-- 以可视化摘要展示 link budget、允许抓取的类型、snippet-only 类型和跳过规则，避免 EvidencePack 把所有 evidence 堆在一起。
-
-提示语必须说明：修改 policy 只影响后续 scan/enrich，不会自动重跑。
 
 ## ReviewChecklistPanel
 

@@ -230,14 +230,15 @@ Example real-scan validation:
 Email summary is moving toward a compact VIS-style Workbench model:
 
 ```text
-EmailPolicyPanel -> EmailEvidencePack -> EmailIntelBrief -> ReviewChecklistPanel -> EPUB / Delivery
+EmailEvidencePolicy -> EmailEvidencePack -> EmailIntelBrief -> ReviewChecklistPanel -> EPUB / Delivery
 ```
 
-- `EmailPolicyPanel`, `EmailEvidencePack` and `EmailIntelBrief` are the three
+- `EmailEvidencePolicy`, `EmailEvidencePack` and `EmailIntelBrief` are the three
   core visual work objects.
-- `EmailPolicyPanel` edits and visualizes the declarative policy spec at
+- `EmailEvidencePolicy` is the declarative evidence policy spec at
   `outputs/email_link_policy.md`. It controls classification, link enrichment,
-  skip rules and evidence boundaries before evidence is generated.
+  skip rules and evidence boundaries before evidence is generated. The GUI view
+  that edits it is the `EmailPolicyPanel`.
 - `ReviewChecklistPanel` is the quality gate view inside the Brief review flow,
   not a separate core visual work object.
 - `EmailEvidencePack` is still written as

@@ -16,7 +16,7 @@ Podsum Email Summary 的主线是：先把邮件作为 Podcast 之外的第二�
 
 核心可视化工作对象有三个：
 
-- `EmailPolicyPanel`：邮件证据策略台，对应 `outputs/email_link_policy.md`。用户需要看见和调整它，才能控制邮件分类、链接补全、跳过规则和 evidence 生成边界。
+- `EmailEvidencePolicy`：邮件证据策略，对应 `outputs/email_link_policy.md`。用户需要看见和调整它，才能控制邮件分类、链接补全、跳过规则和 evidence 生成边界。`EmailPolicyPanel` 是它在 GUI 里的编辑和摘要面板，不是领域对象本身。
 - `EmailEvidencePack`：邮件证据包，对应 `EmailReports/email-scan-YYYY-MM-DD.json`。用户需要看见、筛选、标注、锁定它，才能控制下游 Brief 的生成质量。每封邮件至少包含一条 `type=email_snippet` 的邮件自身 evidence；`type=public_link` 的 evidence 只在链接补全时追加。
 - `EmailIntelBrief`：邮件情报简报，对应 `EmailReports/email-summary-YYYY-MM-DD.md`。用户需要审核、编辑、确认和批准它，才能进入 EPUB 或发送阶段。
 
@@ -34,11 +34,29 @@ sidecar 只保存人工标注、Brief 状态和 override，不覆盖 scan JSON �
 
 ```mermaid
 flowchart LR
-  P["EmailPolicyPanel<br/>核心对象：邮件证据策略台"] --> E["EmailEvidencePack<br/>核心对象：邮件证据包"]
+  P["EmailEvidencePolicy<br/>核心对象：邮件证据策略"] --> E["EmailEvidencePack<br/>核心对象：邮件证据包"]
   E --> B["EmailIntelBrief<br/>核心对象：邮件情报简报"]
   B --> R["ReviewChecklistPanel<br/>附属面板：质量门禁"]
   R --> X["EPUB / Delivery<br/>人工批准后的下游动作"]
 ```
+
+每个核心对象的第一版 GUI 内部区域：
+
+- `EmailEvidencePolicy`：
+  - Type Rules：邮件类型规则和匹配条件。
+  - Link Strategy：哪些类型抓公开链接、每封/全局抓取上限。
+  - Safety / Skip Rules：tracking、unsubscribe、login、private URL 等跳过规则。
+  - Spec Editor：Markdown + fenced JSON 高级编辑区。
+- `EmailEvidencePack`：
+  - Evidence Health：strong/usable/weak/failed/skipped 的证据健康度。
+  - Email Item List：按类型、风险、附件、链接证据筛选邮件。
+  - Evidence Detail：基础邮件证据、链接决策、链接证据、风险分层展示。
+  - Review Marks：ignore、important、needs_link_review、type_override。
+- `EmailIntelBrief`：
+  - Brief Sections：摘要 Markdown 渲染和人工 override。
+  - Source Index：UID/from/subject/date 的来源索引与跳转。
+  - Review Checklist：质量门禁结果。
+  - Export / Approval：approved 后才显示 EPUB/Delivery 的人工下一步命令。
 
 ## Phases
 
@@ -55,8 +73,8 @@ flowchart LR
 - 真实 IMAP 必须显式 `--allow-imap-read`
 - 默认不抓网页，不发送，不修改邮箱状态，不接 launchd
 
-文档措辞统一为：`EmailPolicyPanel` 是核心可视化工作对象，`EmailPolicy`
-是它编辑和保存的声明式 Spec/config。
+文档措辞统一为：`EmailEvidencePolicy` 是核心可视化工作对象，`EmailPolicy`
+是它编辑和保存的声明式 Spec/config，`EmailPolicyPanel` 是 GUI 面板。
 
 ### Phase 2：定义 VIS GUI 规格
 
@@ -93,7 +111,7 @@ plans/podsum-email-workbench-gui-spec.md
 
 Workbench 采用单页审核台：
 
-- 左侧对象导航：`EmailPolicyPanel`、`EmailEvidencePack`、`EmailIntelBrief`。
+- 左侧对象导航：`EmailEvidencePolicy`、`EmailEvidencePack`、`EmailIntelBrief`。
 - 中间主工作区：当前核心对象。
 - 右侧附属面板：`ReviewChecklistPanel`、命令预览。
 - 底部或顶部状态区：日期、账号、artifact 缺失状态、server mode。

@@ -148,7 +148,11 @@ class PodsumCliTest(unittest.TestCase):
                 stop_workbench(server, thread)
 
             self.assertIn('data-view="policy"', home)
-            self.assertIn("EmailPolicyPanel", home)
+            self.assertIn("EmailEvidencePolicy", home)
+            workbench_source = (ROOT / "outputs" / "podsum_email_workbench.py").read_text(encoding="utf-8")
+            self.assertIn("1. Type Rules", workbench_source)
+            self.assertIn("1. Base Evidence", workbench_source)
+            self.assertIn("2. Link Decision", workbench_source)
             self.assertEqual(context["server"]["mode"], "manual-local-workbench")
             self.assertFalse(context["server"]["safe_defaults"]["reads_imap"])
             self.assertIn("scan", context["missing"])

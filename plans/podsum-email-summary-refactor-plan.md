@@ -39,10 +39,11 @@ Email Summary 能力。
 
 Email Summary 保留三个核心可视化工作对象。另有一个质量门禁视图：
 
-- `EmailPolicyPanel`：邮件证据策略台。物理文件为
+- `EmailEvidencePolicy`：邮件证据策略。物理文件为
   `outputs/email_link_policy.md`，用声明式策略决定邮件类型、链接抓取和
   跳过规则。它必须暴露给用户可视化操作，因为它直接控制 EvidencePack
-  里 evidence 如何产生和分层。
+  里 evidence 如何产生和分层。`EmailPolicyPanel` 是它在 GUI 中的编辑
+  和摘要面板。
 - `EmailEvidencePack`：邮件证据包。物理文件继续使用
   `EmailReports/email-scan-YYYY-MM-DD.json`，内部包含 scan metadata、
   email items、links、evidence、risks。

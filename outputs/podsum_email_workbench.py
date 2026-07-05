@@ -547,19 +547,19 @@ INDEX_HTML = """<!doctype html>
   </header>
   <main class="shell">
     <nav class="nav">
-      <button class="nav-button" data-view="policy">EmailPolicyPanel</button>
+      <button class="nav-button" data-view="policy">EmailEvidencePolicy</button>
       <button class="nav-button active" data-view="evidence">EmailEvidencePack</button>
       <button class="nav-button" data-view="brief">EmailIntelBrief</button>
     </nav>
     <section class="workspace">
       <section id="policyView" class="view">
         <div class="section-head">
-          <h2>EmailPolicyPanel</h2>
+          <h2>EmailEvidencePolicy</h2>
           <button id="savePolicy">Save policy</button>
         </div>
-        <p class="notice">核心可视化工作对象：控制邮件分类、链接补全和 evidence 生成边界。修改 policy 只影响后续 scan/enrich，不会自动重跑。</p>
+        <p class="notice">核心可视化工作对象：控制邮件类型规则、链接策略、安全跳过规则和 evidence 生成边界。EmailPolicyPanel 是它的 GUI 编辑面板；修改 policy 只影响后续 scan/enrich，不会自动重跑。</p>
         <div id="policySummary" class="policy-summary"></div>
-        <label class="field-label" for="policyEditor">EmailPolicy spec</label>
+        <label class="field-label" for="policyEditor">EmailPolicy spec (advanced)</label>
         <textarea id="policyEditor" spellcheck="false"></textarea>
         <div id="policyStatus" class="notice"></div>
       </section>
@@ -717,6 +717,10 @@ p { margin: 0; }
 .pill.warn, .badge.warn { border-color: #f2c078; color: var(--warn); }
 .pill.bad, .badge.bad { border-color: #f4a29b; color: var(--bad); }
 .pill.good, .badge.good { border-color: #9bd4b5; color: var(--good); }
+.pill.usable, .badge.usable { border-color: #7fcac2; color: var(--accent); }
+.pill.weak, .badge.weak { border-color: #f2c078; color: var(--warn); }
+.pill.failed, .badge.failed { border-color: #f4a29b; color: var(--bad); }
+.pill.skipped, .badge.skipped { border-color: #b8c0cc; color: var(--muted); }
 .stats, .policy-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -762,6 +766,19 @@ p { margin: 0; }
 }
 .detail pre, .command {
   white-space: pre-wrap;
+  word-break: break-word;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 12px;
+  font-size: 12px;
+}
+th, td {
+  border: 1px solid var(--line);
+  padding: 6px;
+  text-align: left;
+  vertical-align: top;
   word-break: break-word;
 }
 .panel {
@@ -878,6 +895,59 @@ function countBy(items, getter) {
   return counts;
 }
 
+function policyForType(emailType) {
+  const types = state.policy?.policy?.email_types || [];
+  return types.find((item) => item.name === emailType) || {
+    name: emailType || "unknown",
+    fetch_links: false,
+    summary_focus: "",
+  };
+}
+
+function evidenceByType(item, evidenceType) {
+  return (item.evidence || []).filter((ev) => ev.type === evidenceType);
+}
+
+function baseEvidenceItem(item) {
+  return evidenceByType(item, "email_snippet")[0] || {
+    type: "email_snippet",
+    status: item.snippet ? "available" : "missing",
+    title: item.subject || "(no subject)",
+    excerpt: item.snippet || "",
+    reason: item.snippet ? "" : "missing_snippet",
+  };
+}
+
+function linkEvidenceItems(item) {
+  return evidenceByType(item, "public_link");
+}
+
+function evidenceHealth(item) {
+  const base = baseEvidenceItem(item);
+  const linkEvidence = linkEvidenceItems(item);
+  const risks = item.risks || [];
+  const fetchedLink = linkEvidence.some((ev) => ev.status === "fetched");
+  const failedLink = linkEvidence.some((ev) => ev.status === "failed") || risks.includes("link_failed");
+  const skippedLink = linkEvidence.some((ev) => ev.status === "skipped")
+    || risks.some((risk) => ["link_skipped", "tracking_skipped", "link_budget_exhausted"].includes(risk));
+  const snippetLength = String(base.excerpt || item.snippet || "").trim().length;
+  if (failedLink) return "failed";
+  if (fetchedLink && snippetLength > 0) return "good";
+  if (skippedLink) return "skipped";
+  if (snippetLength >= 40) return "usable";
+  return "weak";
+}
+
+function healthLabel(health) {
+  return {
+    good: "strong evidence",
+    usable: "usable snippet",
+    weak: "weak snippet",
+    failed: "link failed",
+    skipped: "link skipped",
+  }[health] || health;
+}
+
 function renderContext() {
   const c = state.context;
   document.getElementById("contextLine").textContent =
@@ -915,12 +985,15 @@ function renderEvidence() {
   const items = scanItems();
   const typeCounts = countBy(items, (item) => item.email_type || "unknown");
   const riskCounts = countBy(items, (item) => item.risks || []);
-  const fetchedCount = items.filter((item) => (item.evidence || []).some((ev) => ev.status === "fetched")).length;
+  const fetchedCount = items.filter((item) => linkEvidenceItems(item).some((ev) => ev.status === "fetched")).length;
+  const healthCounts = countBy(items, (item) => evidenceHealth(item));
   document.getElementById("evidenceStats").innerHTML = [
     `<div class="stat"><strong>${scan.raw_count ?? 0}</strong><span>raw messages</span></div>`,
     `<div class="stat"><strong>${items.length}</strong><span>loaded items</span></div>`,
     `<div class="stat"><strong>${scan.possibly_truncated ? "yes" : "no"}</strong><span>possibly truncated</span></div>`,
-    `<div class="stat"><strong>${fetchedCount}</strong><span>items with fetched evidence</span></div>`,
+    `<div class="stat"><strong>${fetchedCount}</strong><span>items with public link evidence</span></div>`,
+    `<div class="stat"><strong>${healthCounts.good || 0}</strong><span>strong evidence</span></div>`,
+    `<div class="stat"><strong>${healthCounts.usable || 0}</strong><span>usable snippet only</span></div>`,
   ].join("");
   fillFilter("typeFilter", "", "all types", Object.keys(typeCounts));
   fillFilter("riskFilter", "", "all risks", Object.keys(riskCounts));
@@ -929,12 +1002,15 @@ function renderEvidence() {
   document.getElementById("emailList").innerHTML = itemsToShow.map((item) => {
     const review = item._review || {};
     const uid = String(item.uid || "");
+    const health = evidenceHealth(item);
     const riskBadges = (item.risks || []).slice(0, 3).map((risk) => badge(risk, "warn")).join(" ");
+    const linkCount = (item.links || []).length;
+    const pendingLinks = (item.links || []).filter((link) => !link.policy_decision || link.policy_decision === "pending").length;
     return `<button class="email-row ${uid === state.selectedUid ? "selected" : ""}" data-uid="${escapeHtml(uid)}">
       <h4>${escapeHtml(item.subject || "(no subject)")}</h4>
-      <div class="meta">UID ${escapeHtml(uid)} · ${escapeHtml(item.email_type || "unknown")}</div>
+      <div class="meta">UID ${escapeHtml(uid)} · ${escapeHtml(item.email_type || "unknown")} · ${linkCount} links</div>
       <div class="meta">${escapeHtml(item.from || "")}</div>
-      <div>${riskBadges} ${review.important ? badge("important", "good") : ""} ${review.ignore ? badge("ignored", "bad") : ""}</div>
+      <div>${badge(healthLabel(health), health)} ${pendingLinks ? badge(`${pendingLinks} pending links`, "warn") : ""} ${riskBadges} ${review.important ? badge("important", "good") : ""} ${review.ignore ? badge("ignored", "bad") : ""}</div>
     </button>`;
   }).join("");
   for (const row of document.querySelectorAll(".email-row")) {
@@ -964,19 +1040,55 @@ function renderEmailDetail(item) {
   }
   const uid = String(item.uid || "");
   const review = item._review || {};
-  const links = (item.links || []).map((link) => `<li>${escapeHtml(link.url)} ${badge(link.policy_decision || "pending")}</li>`).join("");
-  const evidence = (item.evidence || []).map((ev) => `<li>${badge(ev.status || "")} ${escapeHtml(ev.title || ev.reason || ev.url || "")}<br><span class="meta">${escapeHtml(ev.excerpt || "")}</span></li>`).join("");
+  const policy = policyForType(item.email_type || "unknown");
+  const health = evidenceHealth(item);
+  const baseEvidence = baseEvidenceItem(item);
+  const links = item.links || [];
+  const linkEvidence = linkEvidenceItems(item);
+  const pendingLinks = links.filter((link) => !link.policy_decision || link.policy_decision === "pending").length;
+  const nextAction = links.length === 0
+    ? "No links detected; use base evidence."
+    : pendingLinks > 0
+      ? "Run email-summary --scan-file ... --enrich-links --no-send."
+      : policy.fetch_links
+        ? "Review link evidence results before approving the Brief."
+        : `No fetch: policy_no_fetch:${policy.name || "unknown"}.`;
+  const linkRows = links.map((link) => `<tr>
+      <td>${escapeHtml(link.policy_decision || "pending")}</td>
+      <td>${escapeHtml(link.anchor_text || "")}</td>
+      <td>${escapeHtml(link.url || "")}</td>
+    </tr>`).join("");
+  const evidenceRows = linkEvidence.map((ev) => `<li>
+      ${badge(ev.status || "unknown", ev.status === "fetched" ? "good" : ev.status === "failed" ? "failed" : "skipped")}
+      ${escapeHtml(ev.title || ev.reason || ev.url || "")}
+      <br><span class="meta">${escapeHtml(ev.url || "")}</span>
+      <br><span class="meta">${escapeHtml(ev.excerpt || "")}</span>
+    </li>`).join("");
+  const riskBadges = (item.risks || []).map((risk) => badge(risk, "warn")).join(" ");
   target.innerHTML = `
     <h3>${escapeHtml(item.subject || "(no subject)")}</h3>
     <p class="meta">UID ${escapeHtml(uid)} · ${escapeHtml(item.date || "")}</p>
     <p class="meta">${escapeHtml(item.from || "")}</p>
-    <p>${badge(item.email_type || "unknown")} ${(item.risks || []).map((risk) => badge(risk, "warn")).join(" ")}</p>
-    <h3>Snippet</h3>
-    <pre>${escapeHtml(item.snippet || "")}</pre>
-    <h3>Links</h3>
-    <ul>${links || "<li>none</li>"}</ul>
-    <h3>Evidence</h3>
-    <ul>${evidence || "<li>none</li>"}</ul>
+    <p>${badge(item.email_type || "unknown")} ${badge(healthLabel(health), health)} ${item.has_attachments ? badge("attachment", "warn") : ""}</p>
+
+    <h3>1. Base Evidence</h3>
+    <p class="meta">${escapeHtml(baseEvidence.status || "available")} · ${escapeHtml(baseEvidence.reason || "email_snippet")}</p>
+    <pre>${escapeHtml(baseEvidence.excerpt || item.snippet || "")}</pre>
+
+    <h3>2. Link Decision</h3>
+    <p>${badge(policy.fetch_links ? "fetch links" : "snippet only", policy.fetch_links ? "good" : "skipped")} ${escapeHtml(policy.summary_focus || "")}</p>
+    <p class="notice">${escapeHtml(nextAction)}</p>
+    <table>
+      <thead><tr><th>decision</th><th>anchor</th><th>url</th></tr></thead>
+      <tbody>${linkRows || `<tr><td colspan="3">No links detected.</td></tr>`}</tbody>
+    </table>
+
+    <h3>3. Link Evidence</h3>
+    <ul>${evidenceRows || "<li>No public link evidence.</li>"}</ul>
+
+    <h3>4. Risks</h3>
+    <p>${riskBadges || badge("none", "good")}</p>
+
     <h3>Review marks</h3>
     <p>${review.ignore ? badge("ignore", "bad") : ""} ${review.important ? badge("important", "good") : ""} ${review.needs_link_review ? badge("needs_link_review", "warn") : ""} ${review.type_override ? badge(`type: ${review.type_override}`) : ""}</p>
     <div class="filters">
@@ -1031,11 +1143,10 @@ function renderPolicySummary() {
   const fetchTypes = types.filter((item) => item.fetch_links).map((item) => item.name);
   const noFetchTypes = types.filter((item) => !item.fetch_links).map((item) => item.name);
   target.innerHTML = [
-    `<div class="policy-card"><strong>link budget</strong><p>per email: ${escapeHtml(limits.max_links_per_email ?? "")}</p><p>total: ${escapeHtml(limits.max_links_total ?? "")}</p><p>timeout: ${escapeHtml(limits.timeout_seconds ?? "")}s</p></div>`,
-    `<div class="policy-card"><strong>fetch links</strong>${fetchTypes.map((name) => badge(name, "good")).join(" ") || badge("none", "warn")}</div>`,
-    `<div class="policy-card"><strong>snippet only</strong>${noFetchTypes.map((name) => badge(name)).join(" ") || badge("none", "warn")}</div>`,
-    `<div class="policy-card"><strong>skip patterns</strong><p>${escapeHtml((policy.skip_url_patterns || []).join(", "))}</p></div>`,
-    `<div class="policy-card"><strong>email types</strong><p>${escapeHtml(types.map((item) => item.name).join(", "))}</p></div>`,
+    `<div class="policy-card"><strong>1. Type Rules</strong><p>${escapeHtml(types.map((item) => item.name).join(", "))}</p></div>`,
+    `<div class="policy-card"><strong>2. Link Strategy</strong><p>per email: ${escapeHtml(limits.max_links_per_email ?? "")} · total: ${escapeHtml(limits.max_links_total ?? "")} · timeout: ${escapeHtml(limits.timeout_seconds ?? "")}s</p>${fetchTypes.map((name) => badge(name, "good")).join(" ") || badge("none", "warn")}</div>`,
+    `<div class="policy-card"><strong>3. Snippet-only Types</strong>${noFetchTypes.map((name) => badge(name, "skipped")).join(" ") || badge("none", "warn")}</div>`,
+    `<div class="policy-card"><strong>4. Safety / Skip Rules</strong><p>${escapeHtml((policy.skip_url_patterns || []).join(", "))}</p></div>`,
   ].join("");
 }
 

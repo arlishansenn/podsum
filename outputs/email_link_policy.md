@@ -4,8 +4,9 @@ This file is the editable EmailPolicy spec for Podsum Email Summary.
 
 It defines how an EmailEvidencePack classifies email items and whether links
 inside those items should be enriched. In the VIS model it is edited through
-the core EmailPolicyPanel visual work object. The Markdown text is for humans;
-Podsum reads the fenced JSON block below.
+the EmailPolicyPanel GUI view of the core EmailEvidencePolicy visual work
+object. The Markdown text is for humans; Podsum reads the fenced JSON block
+below.
 
 ```json
 {
