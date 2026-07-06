@@ -1447,15 +1447,39 @@ def review_checklist(scan: dict[str, Any], markdown: str) -> dict[str, Any]:
     )
     topic_count = int(scan.get("topic_map", {}).get("topic_count") or 0) if isinstance(scan.get("topic_map"), dict) else 0
     has_topic_contract = topic_count > 0 or bool(scan.get("topic_hits"))
+    topic_names = [
+        str(hit.get("name") or "")
+        for hit in scan.get("topic_hits", [])
+        if isinstance(hit, dict) and str(hit.get("name") or "").strip()
+    ]
+    forbidden_patterns = (
+        r"\bEmailEvidencePack\b",
+        r"\bEmailTopicMap\b",
+        r"\bneed_id\b",
+        r"\bsnippet_only\b",
+        r"\blink_triage\b",
+        r"\bhard_skip\b",
+        r"\bskip\b",
+        r"Review Checklist",
+        r"topic\.md",
+        r"这封邮件命中",
+        r"对象:",
+        r"来源对象:",
+        r"处理方式:",
+    )
     checklist = {
-        "has_key_takeaway": "key takeaway" in markdown.lower(),
-        "has_topic_expansion": (not has_topic_contract) or "跟踪话题" in markdown or "topic.md" in markdown,
+        "has_key_takeaway": "key takeaway" in markdown.lower() or "## 今天先看" in markdown,
+        "has_topic_expansion": (not has_topic_contract)
+        or "## 情报线索" in markdown
+        or "## 今天先看" in markdown
+        or any(name and name in markdown for name in topic_names),
         "has_source_index": "email://" in markdown,
         "has_uid_trace": "UID" in markdown,
         "has_truncated_warning": (not scan.get("possibly_truncated")) or "触达上限" in markdown or "可能有遗漏" in markdown,
-        "uses_link_evidence_when_available": (not has_link_evidence) or "链接" in markdown or "evidence" in markdown.lower(),
+        "uses_link_evidence_when_available": (not has_link_evidence) or "链接" in markdown,
         "marks_snippet_only_claims": "snippet_only" not in json.dumps(scan, ensure_ascii=False) or "仅基于邮件摘要" in markdown or "待外部验证" in markdown,
         "no_unbacked_claims": True,
+        "no_internal_markers": not any(re.search(pattern, markdown, flags=re.IGNORECASE) for pattern in forbidden_patterns),
     }
     checklist["ready_to_send"] = all(checklist.values())
     checklist["risks"] = [key for key, value in checklist.items() if key != "ready_to_send" and value is False]
@@ -2013,144 +2037,261 @@ def topic_map_source_line(scan: dict[str, Any]) -> str:
     return f"EmailTopicMap v{version} ({topic_count} topics)"
 
 
-def build_intel_brief_draft(scan: dict[str, Any], reason: str = "") -> str:
-    items = [item for item in scan.get("items", []) if isinstance(item, dict)]
-    need_action, worth_knowing, ignore = classify_brief_items(scan)
-    topic_hit_uids = {
-        str(uid)
-        for hit in scan.get("topic_hits", [])
-        if isinstance(hit, dict)
-        for uid in hit.get("item_uids", [])
-    }
-    link_count = sum(len(item.get("links", []) if isinstance(item.get("links"), list) else []) for item in items)
-    fetched_count = sum(len(fetched_public_link_evidence(item)) for item in items)
-    lines = [
-        f"# Podsum Email Summary {scan['date']}",
-        "",
-        f"生成时间: {now_stamp()}",
-        f"账号: {scan.get('account', '')}",
-        f"扫描窗口: {scan.get('window', '')}",
-        f"原始邮件数: {scan.get('raw_count', 0)}",
-        f"对象: EmailIntelBrief",
-        f"版本: {INTEL_BRIEF_VERSION}",
-        f"来源对象: EmailEvidencePack {scan.get('object_version', '')}",
-        f"引导对象: {topic_map_source_line(scan)}",
-        f"处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief",
-        "",
-        "## key takeaway",
-        "",
-    ]
-    if scan.get("possibly_truncated"):
-        lines.extend(["触达上限，可能有遗漏。", ""])
-    if not items:
-        lines.extend(["本次 EvidencePack 没有邮件条目。", ""])
-    else:
-        lines.extend(
-            [
-                f"本次 EvidencePack 含 {len(items)} 封邮件，类型分布：{brief_type_distribution(scan)}。",
-                f"topic.md 命中：{topic_name_list(scan)}。",
-                f"邮件中共发现 {link_count} 个链接候选，已取得公开网页 evidence {fetched_count} 条；没有公开网页 evidence 的判断均标注为仅基于邮件摘要或待外部验证。",
-                "",
-            ]
-        )
-    if reason:
-        lines.extend(["## 生成说明", "", reason, ""])
+ACTION_SIGNAL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"new sign-?in|sign in|login|password|security alert|安全提醒|新登录|有新的登录|密码|账号安全", re.IGNORECASE), "确认账号安全"),
+    (re.compile(r"monthly statement|statement|invoice|billing|payment|账单|月结|付款|缴费|扣款", re.IGNORECASE), "核对账单或账户文件"),
+    (re.compile(r"trial|free plan|downgraded|subscription|试用|套餐|订阅|降级", re.IGNORECASE), "确认订阅或数据保留"),
+    (re.compile(r"action required|please confirm|please review|please reply|follow-?up|会议|截止|请确认|请回复|需要.{0,12}处理", re.IGNORECASE), "需要人工确认"),
+)
 
-    lines.extend(["## 跟踪话题", ""])
-    groups = topic_groups(scan)
-    if groups:
-        for group in groups:
-            matched = "，".join(group.get("matched_keywords", [])[:8])
-            focus = str(group.get("summary_focus") or "")
-            lines.extend(
-                [
-                    f"### {group.get('name')}",
-                    "",
-                    f"- 关注点：{focus or 'topic.md 未填写 summary_focus'}",
-                    f"- 命中关键词：{matched or '未记录'}",
-                    "",
-                ]
-            )
-            for item in group["items"]:
-                lines.extend(
-                    item_brief_block(
-                        scan,
-                        item,
-                        conclusion="这封邮件命中 topic.md 中的跟踪话题。",
-                        action="围绕该 topic 判断是否需要记录、转入项目资料或进一步打开原文。",
-                    )
-                )
-            lines.append("")
-    else:
-        default_behavior = scan.get("topic_map", {}).get("default_behavior", DEFAULT_TOPIC_MAP["default_behavior"])
-        lines.append(f"本次没有命中 topic.md 中的跟踪话题。{default_behavior}")
+WEAK_TOPIC_KEYWORDS = {
+    "ai",
+    "nb",
+    "vis",
+    "gui",
+    "workflow",
+    "power",
+    "community",
+    "github",
+    "meeting",
+    "ops",
+    "qq",
+    "ppt",
+    "prd",
+    "epub",
+}
 
-    non_topic_need_action = [item for item in need_action if str(item.get("uid") or "") not in topic_hit_uids]
-    lines.extend(["## 需要处理", ""])
-    if non_topic_need_action:
-        for item in non_topic_need_action:
-            lines.extend(
-                item_brief_block(
-                    scan,
-                    item,
-                    conclusion="这封邮件没有命中 topic.md，但可能需要人工确认或后续动作。",
-                    action="打开来源邮件核对完整正文，再决定回复、归档或转交。",
-                )
-            )
-    else:
-        lines.append("topic 之外今天没有明确需要处理的邮件。")
 
-    lines.extend(["", "## 值得知道", ""])
-    non_topic_worth = [item for item in worth_knowing if str(item.get("uid") or "") not in topic_hit_uids]
-    if non_topic_worth:
-        for item in non_topic_worth:
-            lines.extend(
-                item_brief_block(
-                    scan,
-                    item,
-                    conclusion="这封邮件没有命中 topic.md，但包含值得记录或后续阅读的线索。",
-                    action="先低优先级保留；如果反复出现，应补充到 topic.md。",
-                )
-            )
-    else:
-        lines.append("topic.md 未覆盖之外，没有明显值得单独记录的邮件线索。")
-
-    lines.extend(["", "## 可以忽略", ""])
-    if ignore:
-        ignored_types = brief_type_distribution({"items": ignore})
-        lines.append(f"可暂时忽略 {len(ignore)} 封，主要类型：{ignored_types}。忽略依据：没有明确行动信号，或当前只有低信号摘要。")
-        for item in ignore[:8]:
-            lines.append(f"- {source_markdown_link(scan, item)} | Subject={item.get('subject')} | 原因：{evidence_gap_text(item)}")
-        if len(ignore) > 8:
-            lines.append(f"- 其余 {len(ignore) - 8} 封仅保留在 EvidencePack 中，不在正文展开。")
-    else:
-        lines.append("没有需要合并忽略的邮件。")
-
-    topic_items = [
-        item
-        for group in groups
-        for item in group["items"]
-    ]
-    top_items: list[dict[str, Any]] = []
-    seen_top_uids: set[str] = set()
-    for item in topic_items + non_topic_need_action + non_topic_worth:
-        uid = str(item.get("uid") or "")
-        if uid in seen_top_uids:
+def item_plaintext(item: dict[str, Any]) -> str:
+    values = [item.get("from"), item.get("subject"), item.get("snippet")]
+    for evidence in item.get("evidence", []) if isinstance(item.get("evidence"), list) else []:
+        if not isinstance(evidence, dict):
             continue
-        seen_top_uids.add(uid)
-        top_items.append(item)
-        if len(top_items) >= 3:
-            break
-    lines.extend(["", "## 如果只记三件事", ""])
+        values.extend([evidence.get("title"), evidence.get("excerpt"), evidence.get("anchor_text"), evidence.get("email_context")])
+    return clean_text(" ".join(str(value or "") for value in values), 4000)
+
+
+def item_content_text(item: dict[str, Any]) -> str:
+    values = [item.get("subject"), item.get("snippet")]
+    for evidence in item.get("evidence", []) if isinstance(item.get("evidence"), list) else []:
+        if not isinstance(evidence, dict):
+            continue
+        values.extend([evidence.get("title"), evidence.get("excerpt"), evidence.get("anchor_text"), evidence.get("email_context")])
+    return clean_text(" ".join(str(value or "") for value in values), 4000)
+
+
+def is_internal_test_email(item: dict[str, Any]) -> bool:
+    text = item_plaintext(item).lower()
+    subject = str(item.get("subject") or "").strip().lower()
+    return (
+        subject in {"smtp connection test", "imap connection test"}
+        or "test email from the imap/smtp email skill" in text
+        or "this is a test email" in text and "imap/smtp" in text
+    )
+
+
+def is_bulk_or_newsletter_sender(item: dict[str, Any]) -> bool:
+    sender_subject = clean_text(f"{item.get('from') or ''} {item.get('subject') or ''}", 1000).lower()
+    bulk_hints = (
+        "google alerts",
+        "newsletter",
+        "substack",
+        "beehiiv",
+        "nikkei",
+        "the rundown",
+        "therundown",
+        "no-reply",
+        "noreply",
+        "updates@",
+        "marketing@",
+        "crew@",
+        "news@",
+        "mail.",
+    )
+    return any(hint in sender_subject for hint in bulk_hints)
+
+
+def action_reason(item: dict[str, Any]) -> str:
+    text = item_content_text(item)
+    for pattern, reason in ACTION_SIGNAL_PATTERNS:
+        if pattern.search(text):
+            return reason
+    email_type = str(item.get("email_type") or "")
+    if email_type == "transactional" or item.get("has_attachments"):
+        return "需要人工确认"
+    if email_type == "personal" and not is_bulk_or_newsletter_sender(item):
+        return "需要人工确认"
+    return ""
+
+
+def keyword_is_meaningful(keyword: str) -> bool:
+    normalized = keyword.strip().lower()
+    if not normalized or normalized in WEAK_TOPIC_KEYWORDS:
+        return False
+    if re.fullmatch(r"[a-z]{1,3}", normalized):
+        return False
+    return True
+
+
+def delivery_topic_match(item: dict[str, Any], topic: dict[str, Any]) -> bool:
+    text = item_plaintext(item).lower()
+    subject_sender = clean_text(f"{item.get('from') or ''} {item.get('subject') or ''}", 1000).lower()
+    matched = [str(keyword or "").strip() for keyword in topic.get("matched_keywords", []) if str(keyword or "").strip()]
+    if not matched:
+        return False
+    for keyword in matched:
+        key = keyword.lower()
+        if not key or key not in text:
+            continue
+        if keyword_is_meaningful(key):
+            return True
+        if key in subject_sender and len(key) >= 2:
+            return True
+    return False
+
+
+def delivery_primary_topic(item: dict[str, Any]) -> dict[str, Any] | None:
+    topics = [topic for topic in item.get("topics", []) if isinstance(topic, dict) and delivery_topic_match(item, topic)]
+    if not topics:
+        return None
+    return sorted(topics, key=lambda value: (topic_priority_value(value), str(value.get("name") or "")))[0]
+
+
+def delivery_item_score(item: dict[str, Any]) -> int:
+    if is_internal_test_email(item):
+        return -10000
+    score = 0
+    if action_reason(item):
+        score += 100
+    topic = delivery_primary_topic(item)
+    if topic:
+        score += 40 - topic_priority_value(topic) * 5
+    if fetched_public_link_evidence(item):
+        score += 15
+    if str(item.get("email_type") or "") in {"newsletter_article", "digest"}:
+        score += 8
+    if str(item.get("email_type") or "") == "google_alert":
+        score += 4
+    if "snippet_only" in set(item.get("risks", []) if isinstance(item.get("risks"), list) else []):
+        score -= 2
+    return score
+
+
+def delivery_excerpt(item: dict[str, Any], limit: int = 150) -> str:
+    text = evidence_excerpt(item, limit * 2)
+    text = re.sub(r"^(read online|listen online|view it in your browser|view in browser)\s*[-|:]*\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*read more\s*\d*", " ", text, flags=re.IGNORECASE)
+    return clean_text(text, limit)
+
+
+def delivery_item_line(scan: dict[str, Any], item: dict[str, Any], label: str) -> str:
+    subject = clean_text(str(item.get("subject") or ""), 90)
+    excerpt = delivery_excerpt(item)
+    detail = subject
+    if excerpt and excerpt.lower() not in subject.lower():
+        detail = f"{subject}；{excerpt}"
+    return f"- {label}：{source_markdown_link(scan, item)} {detail}。"
+
+
+def delivery_item_label(item: dict[str, Any], fallback: str = "值得知道") -> str:
+    action = action_reason(item)
+    topic = delivery_primary_topic(item)
+    topic_name = str(topic.get("name") or "") if topic else ""
+    if action and action != "需要人工确认":
+        return action
+    if action and topic_name:
+        return f"{action} / {topic_name}"
+    return action or topic_name or fallback
+
+
+def delivery_evidence_boundary(scan: dict[str, Any], displayed_items: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    if scan.get("possibly_truncated"):
+        lines.append("本次扫描触达上限，可能有遗漏。")
+    if any("snippet_only" in set(item.get("risks", []) if isinstance(item.get("risks"), list) else []) for item in displayed_items):
+        lines.append("部分条目仅基于邮件摘要；公开链接未抓取时只作为线索，不作事实验证。")
+    elif any(item.get("links") and not fetched_public_link_evidence(item) for item in displayed_items):
+        lines.append("部分条目包含未抓取的公开链接，只作为线索处理。")
+    return lines
+
+
+def unique_delivery_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for item in items:
+        uid = str(item.get("uid") or "")
+        if not uid or uid in seen or is_internal_test_email(item):
+            continue
+        seen.add(uid)
+        unique.append(item)
+    return unique
+
+
+def build_intel_brief_draft(scan: dict[str, Any], reason: str = "") -> str:
+    items = unique_delivery_items([item for item in scan.get("items", []) if isinstance(item, dict)])
+    action_items = [item for item in items if action_reason(item)]
+    intel_items = [item for item in items if not action_reason(item) and delivery_primary_topic(item)]
+    low_priority_items = [
+        item
+        for item in items
+        if item not in action_items
+        and item not in intel_items
+        and delivery_item_score(item) > 10
+        and str(item.get("email_type") or "") != "google_alert"
+    ]
+    ranked = sorted(action_items + intel_items + low_priority_items, key=lambda item: (-delivery_item_score(item), str(item.get("date") or "")))
+    top_items = ranked[:5]
+    displayed: list[dict[str, Any]] = []
+    lines = [f"# Morning Brief - {scan['date']}", "", "## 今天先看", ""]
     if top_items:
         for item in top_items:
-            lines.append(
-                f"- {source_markdown_link(scan, item)}：{clean_text(str(item.get('subject') or ''), 80)}；"
-                f"{evidence_gap_text(item)}。"
-            )
+            lines.append(delivery_item_line(scan, item, delivery_item_label(item)))
+            displayed.append(item)
     else:
-        lines.append("没有足够证据支持三条结论。")
+        lines.append("- 今天没有需要优先处理或记录的邮件线索。")
 
+    displayed_uids = {str(item.get("uid") or "") for item in displayed}
+    remaining_actions = [item for item in action_items if str(item.get("uid") or "") not in displayed_uids]
+    if remaining_actions:
+        lines.extend(["", "## 需要处理", ""])
+        for item in remaining_actions[:5]:
+            lines.append(delivery_item_line(scan, item, delivery_item_label(item, "需要处理")))
+            displayed.append(item)
+            displayed_uids.add(str(item.get("uid") or ""))
+
+    topic_sections: dict[str, list[dict[str, Any]]] = {}
+    for item in intel_items:
+        uid = str(item.get("uid") or "")
+        if uid in displayed_uids:
+            continue
+        topic = delivery_primary_topic(item)
+        if not topic:
+            continue
+        topic_name = str(topic.get("name") or topic.get("id") or "情报线索")
+        topic_sections.setdefault(topic_name, []).append(item)
+    if topic_sections:
+        lines.extend(["", "## 情报线索", ""])
+        for topic_name, topic_items in topic_sections.items():
+            lines.append(f"### {topic_name}")
+            for item in sorted(topic_items, key=lambda value: -delivery_item_score(value))[:3]:
+                lines.append(delivery_item_line(scan, item, "线索"))
+                displayed.append(item)
+                displayed_uids.add(str(item.get("uid") or ""))
+            lines.append("")
+        if lines[-1] == "":
+            lines.pop()
+
+    remaining_low_priority = [item for item in low_priority_items if str(item.get("uid") or "") not in displayed_uids]
+    if remaining_low_priority:
+        lines.extend(["", "## 低优先级", ""])
+        for item in remaining_low_priority[:3]:
+            lines.append(delivery_item_line(scan, item, "可稍后看"))
+            displayed.append(item)
+
+    boundaries = delivery_evidence_boundary(scan, displayed)
+    if boundaries:
+        lines.extend(["", "## 证据边界", ""])
+        lines.extend(f"- {line}" for line in boundaries)
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -2166,15 +2307,7 @@ def ensure_intel_brief_traceability(markdown: str, scan: dict[str, Any]) -> str:
     if "snippet_only" in json.dumps(scan, ensure_ascii=False) and "仅基于邮件摘要" not in text and "待外部验证" not in text:
         if "## 证据边界" not in "\n".join(additions):
             additions.extend(["## 证据边界", ""])
-        additions.extend(["- 存在 snippet_only 风险；未补全公开网页 evidence 的判断仅基于邮件摘要或待外部验证。", ""])
-    if not has_source_index(text):
-        additions.extend(["## 来源补充（待嵌入正文）", "", "LLM 未把来源嵌入正文；以下来源只用于 Workbench 跳转，后续应回填到对应判断。", ""])
-        for item in scan.get("items", []):
-            if isinstance(item, dict):
-                additions.append(
-                    f"- {source_markdown_link(scan, item)} | From={item.get('from')} | "
-                    f"Subject={item.get('subject')} | Date={item.get('date')}"
-                )
+        additions.extend(["- 部分条目仅基于邮件摘要；公开链接未抓取时只作为线索，不作事实验证。", ""])
     if additions:
         text = text + "\n\n" + "\n".join(additions).rstrip()
     return text.rstrip() + "\n"
@@ -2302,10 +2435,10 @@ def render_report(args: argparse.Namespace, scan: dict[str, Any]) -> str:
     )
     ok, value = run_hermes_prompt(str(args.hermes), prompt, cwd=str(args.project_dir), timeout=args.hermes_timeout)
     if not ok:
-        return append_review_checklist(build_intel_brief_draft(scan, f"Hermes 摘要失败：{value}"), scan)
+        return build_intel_brief_draft(scan, f"Hermes 摘要失败：{value}")
     rendered = value or build_intel_brief_draft(scan, "Hermes returned empty output")
     rendered = prune_empty_signal_sections(rendered)
-    return append_review_checklist(ensure_intel_brief_traceability(rendered, scan), scan)
+    return ensure_intel_brief_traceability(rendered, scan)
 
 
 def write_report(root: Path, scan: dict[str, Any], markdown: str) -> Path:

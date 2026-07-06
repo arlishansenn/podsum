@@ -275,13 +275,11 @@ class PodsumCliTest(unittest.TestCase):
                 ],
             }
             summary = (
-                "# Podsum Email Summary 2026-07-05\n\n"
-                "## key takeaway\n\n"
-                "Current artifact summary.\n\n"
-                "## 来源索引\n\n"
-                "- UID=77 | From=Fixture Sender <sender@example.invalid> | "
-                "Subject=Current artifact mail | Date=Sun, 05 Jul 2026 08:00:00 +0800 | "
-                "`email://2026-07-05/77`\n"
+                "# Morning Brief - 2026-07-05\n\n"
+                "## 今天先看\n\n"
+                "- 需要人工确认：[UID 77](email://2026-07-05/77) Current artifact mail；Current artifact summary.\n\n"
+                "## 证据边界\n\n"
+                "- 部分条目仅基于邮件摘要。\n"
             )
             (reports / "email-scan-2026-07-05.json").write_text(json.dumps(scan), encoding="utf-8")
             (reports / "email-summary-2026-07-05.md").write_text(summary, encoding="utf-8")
@@ -366,15 +364,17 @@ class PodsumCliTest(unittest.TestCase):
         self.assertIn("必须把来源嵌在正文对应内容里", prompt)
         self.assertIn("[UID 1001](email://2026-07-05/1001)", prompt)
         self.assertNotIn("## 来源索引", prompt)
-        self.assertIn("对象: EmailIntelBrief", prompt)
-        self.assertIn("版本: 0.1", prompt)
-        self.assertIn("来源对象: EmailEvidencePack", prompt)
-        self.assertIn("引导对象: EmailTopicMap", prompt)
-        self.assertIn("处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief", prompt)
+        self.assertIn("# Morning Brief - {date}", prompt)
+        self.assertIn("## 今天先看", prompt)
+        self.assertIn("## 需要处理", prompt)
+        self.assertIn("## 情报线索", prompt)
+        self.assertIn("## 证据边界", prompt)
+        self.assertNotIn("对象: EmailIntelBrief", prompt)
+        self.assertNotIn("来源对象: EmailEvidencePack", prompt)
+        self.assertNotIn("处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief", prompt)
         self.assertIn("合并重复、营销、低信号邮件", prompt)
         self.assertIn("跟踪话题提示", prompt)
-        self.assertIn("## 跟踪话题（只列有实质发现的主题）", prompt)
-        self.assertIn("EmailEvidencePack", prompt)
+        self.assertNotIn("EmailEvidencePack", prompt)
         self.assertIn("邮件片段不是完整正文", prompt)
         self.assertIn("已抓取公开网页证据优先", prompt)
         self.assertIn("证据边界可以自然写成", prompt)
@@ -951,12 +951,12 @@ class PodsumCliTest(unittest.TestCase):
         need = loaded["needs"][0]
         self.assertEqual(need["topic_id"], "decision")
         self.assertEqual(need["known_source_refs"], ["email:77"])
-        self.assertIn(need["need_id"], composition.email_intel_brief.markdown)
+        self.assertNotIn(need["need_id"], composition.email_intel_brief.markdown)
         self.assertEqual(composition.email_intel_brief.source_coverage["need_ids"], [need["need_id"]])
         self.assertNotIn("待外部验证", composition.email_intel_brief.markdown)
         self.assertNotIn("claim_or_question", composition.email_intel_brief.markdown)
 
-    def test_email_brief_does_not_inline_all_need_ids_in_each_gap(self) -> None:
+    def test_email_brief_keeps_need_ids_out_of_delivery_markdown(self) -> None:
         scan = {
             "object_type": "email_evidence_pack",
             "object_version": email_summary.EVIDENCE_PACK_VERSION,
@@ -1011,9 +1011,132 @@ class PodsumCliTest(unittest.TestCase):
         )
         markdown = composition.email_intel_brief.markdown
 
-        self.assertEqual(markdown.count("need-2026-07-05-decision-77-snippet-only"), 1)
-        self.assertEqual(markdown.count("need-2026-07-05-decision-78-snippet-only"), 1)
-        self.assertIn("证据需求见文末「证据需求」", markdown)
+        self.assertNotIn("need-2026-07-05-decision-77-snippet-only", markdown)
+        self.assertNotIn("need-2026-07-05-decision-78-snippet-only", markdown)
+        self.assertNotIn("证据需求", markdown)
+        self.assertEqual(
+            composition.email_intel_brief.source_coverage["need_ids"],
+            [
+                "need-2026-07-05-decision-77-snippet-only",
+                "need-2026-07-05-decision-78-snippet-only",
+            ],
+        )
+
+    def test_email_intel_brief_delivery_markdown_is_user_facing(self) -> None:
+        scan = {
+            "object_type": "email_evidence_pack",
+            "object_version": email_summary.EVIDENCE_PACK_VERSION,
+            "status": "ready_for_summary",
+            "date": "2026-07-05",
+            "account": "fixture@example.invalid",
+            "window": "7d",
+            "scan_limit": 10,
+            "raw_count": 5,
+            "possibly_truncated": True,
+            "items": [
+                {
+                    "uid": "983",
+                    "date": "Sun, 05 Jul 2026 08:00:00 +0800",
+                    "from": "OpenAI <noreply@tm.openai.com>",
+                    "subject": "New sign-in to your OpenAI account",
+                    "snippet": "We noticed a new sign-in to your OpenAI account from Los Angeles.",
+                    "has_attachments": False,
+                    "email_type": "unknown",
+                    "links": [],
+                    "evidence": [{"type": "email_snippet", "status": "available", "excerpt": "New sign-in to your OpenAI account."}],
+                    "risks": ["snippet_only"],
+                    "flags": [],
+                    "topics": [
+                        {"id": "ai", "name": "AI 行业 / Agent 战略", "priority": "high", "matched_keywords": ["openai"]},
+                        {"id": "vis", "name": "VIS / NB / 可视化工作对象", "priority": "normal", "matched_keywords": ["vis"]},
+                    ],
+                },
+                {
+                    "uid": "976",
+                    "date": "Sun, 05 Jul 2026 09:00:00 +0800",
+                    "from": "The Rundown AI <news@daily.therundown.ai>",
+                    "subject": "OpenAI's most powerful model is here",
+                    "snippet": "OpenAI launched a limited preview of its newest model for selected users.",
+                    "has_attachments": False,
+                    "email_type": "newsletter_article",
+                    "links": [{"url": "https://example.invalid/openai", "context": "OpenAI model preview"}],
+                    "evidence": [{"type": "email_snippet", "status": "available", "excerpt": "OpenAI launched a limited preview of its newest model."}],
+                    "risks": ["snippet_only"],
+                    "flags": [],
+                    "topics": [
+                        {"id": "ai", "name": "AI 行业 / Agent 战略", "priority": "high", "matched_keywords": ["openai"]},
+                        {"id": "vis", "name": "VIS / NB / 可视化工作对象", "priority": "normal", "matched_keywords": ["vis"]},
+                    ],
+                },
+                {
+                    "uid": "989",
+                    "date": "Sun, 05 Jul 2026 10:00:00 +0800",
+                    "from": "Google Alerts <googlealerts-noreply@google.com>",
+                    "subject": "Google快讯 - 酒鬼酒",
+                    "snippet": "酒鬼酒发布新品，包含若干财经媒体报道。",
+                    "has_attachments": False,
+                    "email_type": "google_alert",
+                    "links": [],
+                    "evidence": [{"type": "email_snippet", "status": "available", "excerpt": "酒鬼酒发布新品。"}],
+                    "risks": ["snippet_only"],
+                    "flags": [],
+                    "topics": [{"id": "vis", "name": "VIS / NB / 可视化工作对象", "priority": "normal", "matched_keywords": ["vis"]}],
+                },
+                {
+                    "uid": "1018",
+                    "date": "Sun, 05 Jul 2026 11:00:00 +0800",
+                    "from": "fixture@example.invalid",
+                    "subject": "SMTP Connection Test",
+                    "snippet": "This is a test email from the IMAP/SMTP email skill.",
+                    "has_attachments": False,
+                    "email_type": "unknown",
+                    "links": [],
+                    "evidence": [{"type": "email_snippet", "status": "available", "excerpt": "This is a test email from the IMAP/SMTP email skill."}],
+                    "risks": ["snippet_only"],
+                    "flags": [],
+                    "topics": [{"id": "ai", "name": "AI 行业 / Agent 战略", "priority": "high", "matched_keywords": ["ai"]}],
+                },
+            ],
+            "topic_map": {"object_type": "email_topic_map", "version": 1, "topic_count": 2},
+            "topic_hits": [
+                {"id": "ai", "name": "AI 行业 / Agent 战略", "priority": "high", "item_uids": ["983", "976", "1018"], "matched_keywords": ["openai", "ai"]},
+                {"id": "vis", "name": "VIS / NB / 可视化工作对象", "priority": "normal", "item_uids": ["983", "976", "989"], "matched_keywords": ["vis"]},
+            ],
+        }
+
+        composition = brief_agent.compose_with_need_store(
+            EmailEvidencePack.from_dict(scan),
+            scan["topic_map"],
+            need_store.empty_need_store(),
+            "",
+            {},
+            "",
+        )
+        markdown = composition.email_intel_brief.markdown
+
+        self.assertIn("# Morning Brief - 2026-07-05", markdown)
+        self.assertIn("## 今天先看", markdown)
+        self.assertIn("## 证据边界", markdown)
+        self.assertIn("[UID 983](email://2026-07-05/983)", markdown)
+        self.assertIn("[UID 976](email://2026-07-05/976)", markdown)
+        self.assertLess(markdown.find("UID 983"), markdown.find("UID 976"))
+        self.assertEqual(markdown.count("email://2026-07-05/983"), 1)
+        self.assertEqual(markdown.count("email://2026-07-05/976"), 1)
+        self.assertNotIn("酒鬼酒", markdown)
+        self.assertNotIn("SMTP Connection Test", markdown)
+        for forbidden in (
+            "对象:",
+            "EmailEvidencePack",
+            "EmailTopicMap",
+            "Review Checklist",
+            "need_id",
+            "snippet_only",
+            "topic.md",
+            "这封邮件命中",
+            "skip",
+            "link_triage",
+        ):
+            self.assertNotIn(forbidden, markdown)
 
     def test_email_need_reconciliation_fulfills_and_stales_from_future_scans_without_external_calls(self) -> None:
         day1_scan = {
@@ -1282,15 +1405,11 @@ class PodsumCliTest(unittest.TestCase):
                 indent=2,
             )
             summary_text = (
-                "# Podsum Email Summary 2026-07-05\n\n"
-                "## key takeaway\n\n"
-                "仅基于邮件摘要：fixture item should be reviewed.\n\n"
-                "## 跟踪话题\n\n"
-                "本次没有命中 topic.md 中的跟踪话题。\n\n"
-                "## 来源索引\n\n"
-                "- UID=77 | From=Fixture Sender <sender@example.invalid> | "
-                "Subject=Fixture actionable mail | Date=Sun, 05 Jul 2026 08:00:00 +0800 | "
-                "`email://2026-07-05/77`\n"
+                "# Morning Brief - 2026-07-05\n\n"
+                "## 今天先看\n\n"
+                "- 需要人工确认：[UID 77](email://2026-07-05/77) Fixture actionable mail；fixture item should be reviewed.\n\n"
+                "## 证据边界\n\n"
+                "- 部分条目仅基于邮件摘要。\n"
             )
             scan_path.write_text(scan_text, encoding="utf-8")
             summary_path.write_text(summary_text, encoding="utf-8")
@@ -1324,7 +1443,7 @@ class PodsumCliTest(unittest.TestCase):
             self.assertEqual(evidence["scan"]["items"][0]["uid"], "77")
             self.assertEqual(brief["object_type"], "email_intel_brief")
             self.assertEqual(brief["object_version"], "0.1")
-            self.assertTrue(any(section["title"] == "key takeaway" for section in brief["sections"]))
+            self.assertTrue(any(section["title"] == "今天先看" for section in brief["sections"]))
             self.assertTrue(brief["source_coverage"]["complete"])
             self.assertEqual(brief["source_index"][0]["source_uid"], "77")
             self.assertEqual(review["review"]["brief_status"], "approved")
@@ -1369,15 +1488,11 @@ class PodsumCliTest(unittest.TestCase):
                 indent=2,
             )
             summary_text = (
-                "# Podsum Email Summary 2026-07-05\n\n"
-                "## key takeaway\n\n"
-                "仅基于邮件摘要：fixture item should be reviewed.\n\n"
-                "## 跟踪话题\n\n"
-                "本次没有命中 topic.md 中的跟踪话题。\n\n"
-                "## 来源索引\n\n"
-                "- UID=77 | From=Fixture Sender <sender@example.invalid> | "
-                "Subject=Fixture actionable mail | Date=Sun, 05 Jul 2026 08:00:00 +0800 | "
-                "`email://2026-07-05/77`\n"
+                "# Morning Brief - 2026-07-05\n\n"
+                "## 今天先看\n\n"
+                "- 需要人工确认：[UID 77](email://2026-07-05/77) Fixture actionable mail；fixture item should be reviewed.\n\n"
+                "## 证据边界\n\n"
+                "- 部分条目仅基于邮件摘要。\n"
             )
             (reports / "email-scan-2026-07-05.json").write_text(scan_text, encoding="utf-8")
             (reports / "email-summary-2026-07-05.md").write_text(summary_text, encoding="utf-8")
@@ -1896,21 +2011,18 @@ class PodsumCliTest(unittest.TestCase):
         checklist = email_summary.review_checklist(scan, markdown)
         sources = email_workbench.parse_source_index(markdown, scan)
 
-        self.assertIn("对象: EmailIntelBrief", markdown)
-        self.assertIn("版本: 0.1", markdown)
-        self.assertIn("来源对象: EmailEvidencePack 0.1", markdown)
-        self.assertIn("引导对象: EmailTopicMap v1 (1 topics)", markdown)
-        self.assertIn("处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief", markdown)
-        self.assertIn("## 需要处理", markdown)
-        self.assertIn("## 跟踪话题", markdown)
+        self.assertIn("# Morning Brief - 2026-07-05", markdown)
+        self.assertIn("## 今天先看", markdown)
+        self.assertIn("## 证据边界", markdown)
         self.assertIn("Decision Follow-up", markdown)
-        self.assertIn("topic.md 命中：Decision Follow-up", markdown)
-        self.assertIn("## 值得知道", markdown)
+        self.assertNotIn("topic.md", markdown)
+        self.assertNotIn("对象: EmailIntelBrief", markdown)
+        self.assertNotIn("Review Checklist", markdown)
         self.assertNotIn("## 来源索引", markdown)
         self.assertIn("触达上限，可能有遗漏", markdown)
         self.assertIn("仅基于邮件摘要", markdown)
         self.assertIn("[UID personal-1](email://2026-07-05/personal-1)", markdown)
-        self.assertEqual([source["source_uid"] for source in sources], ["personal-1", "alert-1"])
+        self.assertEqual([source["source_uid"] for source in sources], ["personal-1"])
         self.assertEqual(sources[0]["subject"], "Fixture Follow-up")
         self.assertTrue(checklist["ready_to_send"])
 
@@ -2284,8 +2396,10 @@ class PodsumCliTest(unittest.TestCase):
             needs = json.loads(needs_path.read_text(encoding="utf-8"))
             self.assertEqual(len(needs["needs"]), 1)
             report_text = report.read_text(encoding="utf-8")
-            self.assertIn("dry-run: Podsum local summary engine", report_text)
-            self.assertIn(needs["needs"][0]["need_id"], report_text)
+            self.assertIn("# Morning Brief - 2026-07-05", report_text)
+            self.assertIn("[UID 42](email://2026-07-05/42)", report_text)
+            self.assertNotIn("dry-run: Podsum local summary engine", report_text)
+            self.assertNotIn(needs["needs"][0]["need_id"], report_text)
 
     def test_email_run_graph_fixture_only_run_produces_lightweight_state(self) -> None:
         if not email_graph.langgraph_available():
@@ -2583,7 +2697,9 @@ class PodsumCliTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             report = tmp_path / "downloads" / "EmailReports" / "email-summary-2026-07-05.md"
-            self.assertIn("对象: EmailIntelBrief", report.read_text(encoding="utf-8"))
+            report_text = report.read_text(encoding="utf-8")
+            self.assertIn("# Morning Brief - 2026-07-05", report_text)
+            self.assertNotIn("对象: EmailIntelBrief", report_text)
 
     def test_email_summary_prompt_receives_evidence_pack_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2664,7 +2780,8 @@ class PodsumCliTest(unittest.TestCase):
             self.assertIn("email_evidence_digest", prompt)
             self.assertIn("source_object_type", prompt)
             self.assertIn("topic_hits", prompt)
-            self.assertIn("EmailEvidencePack", prompt)
+            self.assertNotIn("对象: EmailIntelBrief", prompt)
+            self.assertIn("# Morning Brief - 2026-07-05", prompt)
             self.assertIn("newsletter_article", prompt)
             self.assertIn("Public article excerpt for evidence-aware summary.", prompt)
             self.assertIn("https://example.invalid/article", prompt)
@@ -2924,7 +3041,7 @@ class PodsumCliTest(unittest.TestCase):
             scan = json.loads(copied_scan.read_text(encoding="utf-8"))
             self.assertEqual(scan["raw_count"], 0)
             self.assertEqual(scan["items"], [])
-            self.assertIn("dry-run: Podsum local summary engine", report.read_text(encoding="utf-8"))
+            self.assertIn("# Morning Brief - 2026-07-05", report.read_text(encoding="utf-8"))
 
     def test_email_summary_uses_truncated_scan_file_without_real_imap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3046,13 +3163,11 @@ class PodsumCliTest(unittest.TestCase):
             hermes.write_text(
                 "#!/bin/sh\n"
                 "if [ \"$1\" = \"-z\" ]; then cat <<'EOF'\n"
-                "# Podsum Email Summary 2026-07-05\n\n"
-                "## key takeaway\n\n"
-                "仅基于邮件摘要：fixture item should be reviewed.\n\n"
-                "## 跟踪话题\n\n"
-                "本次没有命中 topic.md 中的跟踪话题。\n\n"
-                "## 来源索引\n\n"
-                "- UID=77 | From=Fixture Sender <sender@example.invalid> | Subject=Fixture actionable mail | Date=Sun, 05 Jul 2026 08:00:00 +0800 | `email://2026-07-05/77`\n"
+                "# Morning Brief - 2026-07-05\n\n"
+                "## 今天先看\n\n"
+                "- 需要人工确认：[UID 77](email://2026-07-05/77) Fixture actionable mail；fixture item should be reviewed.\n\n"
+                "## 证据边界\n\n"
+                "- 部分条目仅基于邮件摘要。\n"
                 "EOF\n"
                 "exit 0; fi\n"
                 f"if [ \"$1\" = \"send\" ]; then printf '%s\\n' \"$@\" > {hermes_args}; echo 'sent'; exit 0; fi\n"

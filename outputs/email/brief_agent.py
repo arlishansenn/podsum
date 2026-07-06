@@ -193,9 +193,7 @@ def _scan_with_topic_map(pack: EmailEvidencePack, topic_map: dict[str, Any]) -> 
 def _build_markdown(scan: dict[str, Any], reason: str, emitted_needs: list[EvidenceNeed]) -> str:
     import podsum_email_summary as email_summary
 
-    markdown = email_summary.append_review_checklist(email_summary.build_intel_brief_draft(scan, reason), scan)
-    markdown = _replace_vague_need_text(markdown, emitted_needs)
-    return _append_need_references(markdown, emitted_needs)
+    return email_summary.build_intel_brief_draft(scan, reason)
 
 
 def _brief_from_markdown(
