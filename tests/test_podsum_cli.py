@@ -354,25 +354,25 @@ class PodsumCliTest(unittest.TestCase):
     def test_email_summary_prompt_matches_deep_interpretation_style(self) -> None:
         prompt = (ROOT / "outputs" / "email_summary_prompt.md").read_text(encoding="utf-8")
 
-        self.assertIn("邮件情报深度解读器", prompt)
-        self.assertIn("基本不需要再打开邮箱逐封确认", prompt)
-        self.assertIn("## key takeaway", prompt)
-        self.assertIn("## 如果只记三件事", prompt)
+        self.assertIn("邮件情报助理", prompt)
+        self.assertIn("不要复述字段名或数据结构", prompt)
+        self.assertIn("必须把来源嵌在正文对应内容里", prompt)
+        self.assertIn("[UID 1001](email://2026-07-05/1001)", prompt)
+        self.assertNotIn("## 来源索引", prompt)
         self.assertIn("对象: EmailIntelBrief", prompt)
         self.assertIn("版本: 0.1", prompt)
         self.assertIn("来源对象: EmailEvidencePack", prompt)
         self.assertIn("引导对象: EmailTopicMap", prompt)
         self.assertIn("处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief", prompt)
-        self.assertIn("不要把输出写成简单分类清单", prompt)
+        self.assertIn("合并重复、营销、低信号邮件", prompt)
         self.assertIn("topic_hits", prompt)
         self.assertIn("items[].topics", prompt)
         self.assertIn("## 跟踪话题", prompt)
         self.assertIn("EmailEvidencePack", prompt)
-        self.assertIn("snippet` 只是邮件摘要或截断片段", prompt)
-        self.assertIn("type=email_snippet", prompt)
-        self.assertIn("type=public_link", prompt)
-        self.assertIn("status=fetched", prompt)
-        self.assertIn("UID={{uid}} | From={{from}} | Subject={{subject}} | Date={{date}}", prompt)
+        self.assertIn("`snippet` / `email_snippet_evidence` 是邮件片段", prompt)
+        self.assertIn("fetched_public_link_evidence", prompt)
+        self.assertIn("evidence_boundaries", prompt)
+        self.assertIn("不要把来源集中放到末尾", prompt)
         self.assertIn("possibly_truncated=true", prompt)
 
     def test_email_link_policy_parses_from_markdown(self) -> None:
@@ -1550,7 +1550,7 @@ class PodsumCliTest(unittest.TestCase):
         scan = email_summary.apply_topics(scan, topic_map)
         markdown = email_summary.build_intel_brief_draft(scan, "dry-run: skipped Hermes summary")
         checklist = email_summary.review_checklist(scan, markdown)
-        sources = email_workbench.parse_source_index(markdown)
+        sources = email_workbench.parse_source_index(markdown, scan)
 
         self.assertIn("对象: EmailIntelBrief", markdown)
         self.assertIn("版本: 0.1", markdown)
@@ -1562,11 +1562,12 @@ class PodsumCliTest(unittest.TestCase):
         self.assertIn("Decision Follow-up", markdown)
         self.assertIn("topic.md 命中：Decision Follow-up", markdown)
         self.assertIn("## 值得知道", markdown)
-        self.assertIn("## 来源索引", markdown)
+        self.assertNotIn("## 来源索引", markdown)
         self.assertIn("触达上限，可能有遗漏", markdown)
         self.assertIn("仅基于邮件摘要", markdown)
-        self.assertIn("UID=personal-1", markdown)
+        self.assertIn("[UID personal-1](email://2026-07-05/personal-1)", markdown)
         self.assertEqual([source["source_uid"] for source in sources], ["personal-1", "alert-1"])
+        self.assertEqual(sources[0]["subject"], "Fixture Follow-up")
         self.assertTrue(checklist["ready_to_send"])
 
     def test_run_once_downloads_only_latest_episode_per_feed(self) -> None:
@@ -2322,6 +2323,115 @@ class PodsumCliTest(unittest.TestCase):
             self.assertIn("newsletter_article", prompt)
             self.assertIn("Public article excerpt for evidence-aware summary.", prompt)
             self.assertIn("https://example.invalid/article", prompt)
+
+    def test_email_summary_llm_input_filters_raw_link_noise(self) -> None:
+        noisy_context = "tracking pixel hidden html " * 200
+        scan = {
+            "object_type": "email_evidence_pack",
+            "object_version": "0.1",
+            "status": "enriched",
+            "date": "2026-07-05",
+            "account": "fixture@example.invalid",
+            "window": "1d",
+            "scan_limit": 10,
+            "raw_count": 1,
+            "possibly_truncated": False,
+            "topic_map": {"object_type": "email_topic_map", "version": 2, "topic_count": 1},
+            "topic_hits": [
+                {
+                    "id": "ai",
+                    "name": "AI",
+                    "priority": "high",
+                    "matched_keywords": ["agent"],
+                    "summary_focus": "Agent workflow",
+                    "item_uids": ["88"],
+                    "description": "drop this verbose topic description",
+                }
+            ],
+            "items": [
+                {
+                    "uid": "88",
+                    "date": "Sun, 05 Jul 2026 08:00:00 +0800",
+                    "from": "Fixture Newsletter <sender@example.invalid>",
+                    "subject": "Agent workflow update",
+                    "snippet": "A useful agent workflow update.",
+                    "email_type": "newsletter_article",
+                    "links": [
+                        {
+                            "url": f"https://noise.example/{index}",
+                            "context": noisy_context,
+                            "anchor_text": "noise",
+                        }
+                        for index in range(60)
+                    ],
+                    "link_triage": {
+                        "total_links": 60,
+                        "hard_skipped_count": 50,
+                        "candidate_group_count": 2,
+                        "selected_fetch_count": 1,
+                        "deferred_count": 1,
+                        "deduped_count": 7,
+                        "unmapped_topic_count": 1,
+                        "groups": [
+                            {
+                                "decision": "fetch",
+                                "reason": "fetch:topic_budget",
+                                "canonical_url": "https://source.example/agent-workflow",
+                                "score": 400,
+                                "topics": [{"id": "ai", "name": "AI", "priority": "high"}],
+                            },
+                            {
+                                "decision": "defer",
+                                "reason": "defer:unmapped_topic",
+                                "canonical_url": "https://noise.example/0",
+                                "score": 0,
+                                "topics": [],
+                            },
+                        ],
+                    },
+                    "evidence": [
+                        {
+                            "type": "public_link",
+                            "url": "https://source.example/agent-workflow",
+                            "final_url": "https://source.example/agent-workflow",
+                            "title": "Agent workflow source",
+                            "excerpt": "Evidence excerpt that the LLM should see.",
+                            "status": "fetched",
+                            "content_type": "text/html",
+                        },
+                        {
+                            "type": "public_link",
+                            "url": "https://noise.example/0",
+                            "status": "skipped",
+                            "reason": "defer:unmapped_topic",
+                        },
+                    ],
+                    "risks": ["unmapped_alert_topic"],
+                    "flags": [],
+                    "topics": [{"id": "ai", "name": "AI", "priority": "high", "matched_keywords": ["agent"]}],
+                }
+            ],
+        }
+
+        raw_json = json.dumps(scan, ensure_ascii=False)
+        compact = email_summary.llm_brief_input(scan)
+        compact_json = json.dumps(compact, ensure_ascii=False)
+
+        self.assertLess(len(compact_json), len(raw_json) // 3)
+        self.assertIn("email_evidence_pack_llm_brief_input", compact_json)
+        self.assertIn("Agent workflow source", compact_json)
+        self.assertIn("Evidence excerpt that the LLM should see.", compact_json)
+        self.assertNotIn(noisy_context, compact_json)
+        self.assertNotIn("\"links\"", compact_json)
+        self.assertNotIn("\"link_triage\"", compact_json)
+        self.assertNotIn("\"public_link_coverage\"", compact_json)
+        self.assertNotIn("\"risks\"", compact_json)
+        self.assertNotIn("\"decision\"", compact_json)
+        self.assertNotIn("\"reason\"", compact_json)
+        self.assertNotIn("\"classification\"", compact_json)
+        self.assertNotIn("\"decision_reason\"", compact_json)
+        self.assertNotIn("defer:unmapped_topic", compact_json)
+        self.assertNotIn("skipped", compact_json)
 
     def test_email_summary_uses_empty_scan_file_without_real_imap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

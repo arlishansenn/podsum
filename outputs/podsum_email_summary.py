@@ -1258,7 +1258,7 @@ def review_checklist(scan: dict[str, Any], markdown: str) -> dict[str, Any]:
     checklist = {
         "has_key_takeaway": "key takeaway" in markdown.lower(),
         "has_topic_expansion": (not has_topic_contract) or "跟踪话题" in markdown or "topic.md" in markdown,
-        "has_source_index": "来源索引" in markdown or "source" in markdown.lower(),
+        "has_source_index": "email://" in markdown,
         "has_uid_trace": "UID" in markdown,
         "has_truncated_warning": (not scan.get("possibly_truncated")) or "触达上限" in markdown or "可能有遗漏" in markdown,
         "uses_link_evidence_when_available": (not has_link_evidence) or "链接" in markdown or "evidence" in markdown.lower(),
@@ -1386,16 +1386,15 @@ def fallback_report(scan: dict[str, Any], reason: str) -> str:
         "",
         f"Hermes 摘要失败：{reason}",
         "",
-        "## 来源索引",
+        "## 来源补充（待嵌入正文）",
         "",
     ]
     if scan.get("possibly_truncated"):
         lines[9:9] = ["触达上限，可能有遗漏。", ""]
     for item in scan.get("items", []):
         lines.append(
-            f"- UID={item.get('uid')} | From={item.get('from')} | "
-            f"Subject={item.get('subject')} | Date={item.get('date')} | "
-            f"`email://{scan['date']}/{item.get('uid')}`"
+            f"- {source_markdown_link(scan, item)} | From={item.get('from')} | "
+            f"Subject={item.get('subject')} | Date={item.get('date')}"
         )
     return "\n".join(lines).rstrip() + "\n"
 
@@ -1406,6 +1405,96 @@ def source_index_line(scan: dict[str, Any], item: dict[str, Any]) -> str:
         f"Subject={item.get('subject')} | Date={item.get('date')} | "
         f"`email://{scan['date']}/{item.get('uid')}`"
     )
+
+
+def source_markdown_link(scan: dict[str, Any], item: dict[str, Any]) -> str:
+    uid = item.get("uid")
+    return f"[UID {uid}](email://{scan['date']}/{uid})"
+
+
+def compact_topic_ref(topic: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: topic.get(key)
+        for key in ("id", "name", "priority", "matched_keywords", "summary_focus", "item_uids")
+        if key in topic
+    }
+
+
+def compact_evidence_for_llm(evidence: dict[str, Any]) -> dict[str, Any]:
+    compact = {
+        "type": evidence.get("type"),
+        "status": evidence.get("status"),
+        "url": evidence.get("url"),
+        "final_url": evidence.get("final_url"),
+        "title": clean_text(str(evidence.get("title") or ""), 180),
+        "excerpt": clean_text(str(evidence.get("excerpt") or ""), 900),
+        "content_type": evidence.get("content_type"),
+    }
+    return {key: value for key, value in compact.items() if value not in (None, "", [])}
+
+
+def evidence_boundaries_for_llm(item: dict[str, Any]) -> list[str]:
+    risks = set(item.get("risks", []) if isinstance(item.get("risks"), list) else [])
+    boundaries: list[str] = []
+    if "snippet_only" in risks:
+        boundaries.append("只有邮件摘要或片段，缺少完整正文或公开网页证据。")
+    if "metadata_only" in risks:
+        boundaries.append("只有邮件元数据，不能据此扩写结论。")
+    if {"link_failed", "link_budget_exhausted", "unmapped_alert_topic"} & risks:
+        boundaries.append("公开网页证据不完整。")
+    if item.get("links") and not fetched_public_link_evidence(item):
+        boundaries.append("没有可用的 fetched public_link evidence。")
+    return list(dict.fromkeys(boundaries))
+
+
+def compact_item_for_llm(scan: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+    evidence = [entry for entry in item.get("evidence", []) if isinstance(entry, dict)]
+    fetched = [entry for entry in evidence if entry.get("type") == "public_link" and entry.get("status") == "fetched"]
+    compact = {
+        "uid": item.get("uid"),
+        "date": item.get("date"),
+        "from": item.get("from"),
+        "subject": item.get("subject"),
+        "source_ref": f"email://{scan.get('date')}/{item.get('uid')}",
+        "email_type": item.get("email_type"),
+        "snippet": clean_text(str(item.get("snippet") or ""), 900),
+        "evidence_boundaries": evidence_boundaries_for_llm(item),
+        "flags": item.get("flags", []),
+        "has_attachments": item.get("has_attachments"),
+        "attachment_count": item.get("attachment_count"),
+        "topics": [compact_topic_ref(topic) for topic in item.get("topics", []) if isinstance(topic, dict)],
+        "fetched_public_link_evidence": [compact_evidence_for_llm(entry) for entry in fetched[:5]],
+        "email_snippet_evidence": [
+            compact_evidence_for_llm(entry)
+            for entry in evidence
+            if entry.get("type") == "email_snippet"
+        ][:1],
+    }
+    return {key: value for key, value in compact.items() if value not in (None, "", [])}
+
+
+def llm_brief_input(scan: dict[str, Any]) -> dict[str, Any]:
+    topic_map = scan.get("topic_map") if isinstance(scan.get("topic_map"), dict) else {}
+    return {
+        "object_type": "email_evidence_pack_llm_brief_input",
+        "source_object_type": scan.get("object_type", "email_evidence_pack"),
+        "source_object_version": scan.get("object_version", EVIDENCE_PACK_VERSION),
+        "date": scan.get("date"),
+        "account": scan.get("account"),
+        "window": scan.get("window"),
+        "scan_limit": scan.get("scan_limit"),
+        "raw_count": scan.get("raw_count"),
+        "possibly_truncated": scan.get("possibly_truncated"),
+        "status": scan.get("status"),
+        "topic_map": {
+            "object_type": topic_map.get("object_type", "email_topic_map"),
+            "version": topic_map.get("version"),
+            "topic_count": topic_map.get("topic_count"),
+            "default_behavior": topic_map.get("default_behavior"),
+        },
+        "topic_hits": [compact_topic_ref(hit) for hit in scan.get("topic_hits", []) if isinstance(hit, dict)],
+        "items": [compact_item_for_llm(scan, item) for item in scan.get("items", []) if isinstance(item, dict)],
+    }
 
 
 def fetched_public_link_evidence(item: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1456,7 +1545,7 @@ def item_brief_block(scan: dict[str, Any], item: dict[str, Any], *, conclusion: 
         f"- 结论：{conclusion}",
         f"  - 依据：{excerpt or '没有可用正文片段'}（{evidence_gap_text(item)}）",
         f"  - 建议动作：{action}",
-        f"  - 来源：{source_index_line(scan, item).removeprefix('- ')}",
+        f"  - 来源：{source_markdown_link(scan, item)} | From={item.get('from')} | Subject={item.get('subject')} | Date={item.get('date')}",
     ]
 
 
@@ -1629,9 +1718,9 @@ def build_intel_brief_draft(scan: dict[str, Any], reason: str = "") -> str:
         ignored_types = brief_type_distribution({"items": ignore})
         lines.append(f"可暂时忽略 {len(ignore)} 封，主要类型：{ignored_types}。忽略依据：没有明确行动信号，或当前只有低信号摘要。")
         for item in ignore[:8]:
-            lines.append(f"- UID={item.get('uid')} | Subject={item.get('subject')} | 原因：{evidence_gap_text(item)}")
+            lines.append(f"- {source_markdown_link(scan, item)} | Subject={item.get('subject')} | 原因：{evidence_gap_text(item)}")
         if len(ignore) > 8:
-            lines.append(f"- 其余 {len(ignore) - 8} 封只保留在来源索引中。")
+            lines.append(f"- 其余 {len(ignore) - 8} 封仅保留在 EvidencePack 中，不在正文展开。")
     else:
         lines.append("没有需要合并忽略的邮件。")
 
@@ -1654,20 +1743,17 @@ def build_intel_brief_draft(scan: dict[str, Any], reason: str = "") -> str:
     if top_items:
         for item in top_items:
             lines.append(
-                f"- UID={item.get('uid')}：{clean_text(str(item.get('subject') or ''), 80)}；"
+                f"- {source_markdown_link(scan, item)}：{clean_text(str(item.get('subject') or ''), 80)}；"
                 f"{evidence_gap_text(item)}。"
             )
     else:
         lines.append("没有足够证据支持三条结论。")
 
-    lines.extend(["", "## 来源索引", ""])
-    for item in items:
-        lines.append(source_index_line(scan, item))
     return "\n".join(lines).rstrip() + "\n"
 
 
 def has_source_index(markdown: str) -> bool:
-    return "来源索引" in markdown or "source" in markdown.lower()
+    return "email://" in markdown
 
 
 def ensure_intel_brief_traceability(markdown: str, scan: dict[str, Any]) -> str:
@@ -1680,10 +1766,13 @@ def ensure_intel_brief_traceability(markdown: str, scan: dict[str, Any]) -> str:
             additions.extend(["## 证据边界", ""])
         additions.extend(["- 存在 snippet_only 风险；未补全公开网页 evidence 的判断仅基于邮件摘要或待外部验证。", ""])
     if not has_source_index(text):
-        additions.extend(["## 来源索引", ""])
+        additions.extend(["## 来源补充（待嵌入正文）", "", "LLM 未把来源嵌入正文；以下来源只用于 Workbench 跳转，后续应回填到对应判断。", ""])
         for item in scan.get("items", []):
             if isinstance(item, dict):
-                additions.append(source_index_line(scan, item))
+                additions.append(
+                    f"- {source_markdown_link(scan, item)} | From={item.get('from')} | "
+                    f"Subject={item.get('subject')} | Date={item.get('date')}"
+                )
     if additions:
         text = text + "\n\n" + "\n".join(additions).rstrip()
     return text.rstrip() + "\n"
@@ -1700,7 +1789,7 @@ def render_report(args: argparse.Namespace, scan: dict[str, Any]) -> str:
         pack = EmailEvidencePack.from_dict(scan)
         topic_map = scan.get("topic_map", {}) if isinstance(scan.get("topic_map"), dict) else {}
         return brief_agent.compose_with_need_store(pack, topic_map, empty_need_store(), "", {}, "dry-run: skipped Hermes summary").email_intel_brief.markdown
-    scan_json = json.dumps(scan, ensure_ascii=False, indent=2)
+    scan_json = json.dumps(llm_brief_input(scan), ensure_ascii=False, indent=2)
     prompt = args.email_summary_prompt.read_text(encoding="utf-8").format(
         date=scan["date"],
         generated_at=now_stamp(),

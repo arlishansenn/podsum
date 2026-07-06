@@ -377,12 +377,33 @@ SOURCE_RE = re.compile(
     r"email://(?P<scan_date>[^/`\s]+)/(?P<source_uid>[^`\s]+)",
     flags=re.IGNORECASE,
 )
+SOURCE_URI_RE = re.compile(r"email://(?P<scan_date>[^/`\s]+)/(?P<source_uid>[^`\s)\],。；，]+)", flags=re.IGNORECASE)
 SECTION_RE = re.compile(r"^##\s+(?P<title>.+?)\s*$", flags=re.MULTILINE)
 
 
-def parse_source_index(markdown: str) -> list[dict[str, str]]:
+def _scan_source_lookup(scan: dict[str, Any] | None) -> dict[str, dict[str, str]]:
+    items = scan.get("items", []) if isinstance(scan, dict) else []
+    lookup: dict[str, dict[str, str]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        uid = str(item.get("uid") or "")
+        if not uid:
+            continue
+        lookup[uid] = {
+            "uid": uid,
+            "source_uid": uid,
+            "from": str(item.get("from") or ""),
+            "subject": str(item.get("subject") or ""),
+            "date": str(item.get("date") or ""),
+        }
+    return lookup
+
+
+def parse_source_index(markdown: str, scan: dict[str, Any] | None = None) -> list[dict[str, str]]:
     sources: list[dict[str, str]] = []
     seen: set[str] = set()
+    lookup = _scan_source_lookup(scan)
     for match in SOURCE_RE.finditer(markdown):
         source = {key: value.strip() for key, value in match.groupdict().items()}
         source_uid = source.get("source_uid") or source.get("uid") or ""
@@ -390,6 +411,16 @@ def parse_source_index(markdown: str) -> list[dict[str, str]]:
             continue
         seen.add(source_uid)
         source["uid"] = source_uid
+        sources.append(source)
+    for match in SOURCE_URI_RE.finditer(markdown):
+        source = {key: value.strip() for key, value in match.groupdict().items()}
+        source_uid = source.get("source_uid") or ""
+        if not source_uid or source_uid in seen:
+            continue
+        seen.add(source_uid)
+        source.update(lookup.get(source_uid, {}))
+        source["uid"] = source_uid
+        source["source_uid"] = source_uid
         sources.append(source)
     return sources
 
@@ -412,7 +443,7 @@ def parse_markdown_sections(markdown: str) -> list[dict[str, Any]]:
 
 
 def brief_source_coverage(markdown: str, scan: dict[str, Any] | None) -> dict[str, Any]:
-    sources = parse_source_index(markdown)
+    sources = parse_source_index(markdown, scan)
     source_uids = {str(source.get("source_uid") or source.get("uid") or "") for source in sources}
     items = scan.get("items", []) if isinstance(scan, dict) else []
     scan_uids = {str(item.get("uid") or "") for item in items if isinstance(item, dict)}
@@ -442,7 +473,7 @@ def intel_brief_payload(config: WorkbenchConfig) -> dict[str, Any]:
         "markdown": markdown,
         "effective_markdown": effective,
         "source": "review_override" if override else "summary_file",
-        "source_index": parse_source_index(effective),
+        "source_index": parse_source_index(effective, scan),
         "sections": parse_markdown_sections(effective),
         "source_coverage": brief_source_coverage(effective, scan),
         "review": review,
@@ -1306,14 +1337,54 @@ function badge(value, kind = "") {
   return `<span class="badge ${kind}">${escapeHtml(value)}</span>`;
 }
 
+function sourceUidFromUrl(url) {
+  const match = String(url || "").match(/^email:\/\/[^/]+\/([^`\s)\],。；，]+)/);
+  return match ? match[1] : "";
+}
+
+function renderLink(label, url) {
+  const href = String(url || "");
+  const uid = sourceUidFromUrl(href);
+  if (uid) {
+    return `<a href="${escapeHtml(href)}" data-source-uid="${escapeHtml(uid)}">${escapeHtml(label || `UID ${uid}`)}</a>`;
+  }
+  const external = /^https?:\/\//i.test(href);
+  const attrs = external ? ` target="_blank" rel="noreferrer"` : "";
+  return `<a href="${escapeHtml(href)}"${attrs}>${escapeHtml(label || href)}</a>`;
+}
+
+function renderInlineMarkdown(value) {
+  const text = String(value ?? "");
+  const linkRe = /\[([^\]\n]+)\]\(([^)\s]+)\)/g;
+  let output = "";
+  let cursor = 0;
+  for (const match of text.matchAll(linkRe)) {
+    output += linkifyBareUrls(text.slice(cursor, match.index));
+    output += renderLink(match[1], match[2]);
+    cursor = match.index + match[0].length;
+  }
+  output += linkifyBareUrls(text.slice(cursor));
+  return output;
+}
+
+function linkifyBareUrls(value) {
+  return escapeHtml(value).replace(/https?:\/\/[^\s<]+/g, (url) => {
+    const cleanUrl = url.replace(/[.,;:!?，。；：！？]+$/, "");
+    const suffix = url.slice(cleanUrl.length);
+    return renderLink(cleanUrl, cleanUrl) + escapeHtml(suffix);
+  });
+}
+
 function markdownToHtml(markdown) {
   const lines = String(markdown || "").split(/\r?\n/);
   return lines.map((line) => {
-    if (line.startsWith("# ")) return `<h1>${escapeHtml(line.slice(2))}</h1>`;
-    if (line.startsWith("## ")) return `<h2>${escapeHtml(line.slice(3))}</h2>`;
-    if (line.startsWith("- ")) return `<p>• ${escapeHtml(line.slice(2))}</p>`;
+    if (line.startsWith("# ")) return `<h1>${renderInlineMarkdown(line.slice(2))}</h1>`;
+    if (line.startsWith("### ")) return `<h3>${renderInlineMarkdown(line.slice(4))}</h3>`;
+    if (line.startsWith("## ")) return `<h2>${renderInlineMarkdown(line.slice(3))}</h2>`;
+    if (line.startsWith("- ")) return `<p>• ${renderInlineMarkdown(line.slice(2))}</p>`;
+    if (/^\d+\.\s+/.test(line)) return `<p>${renderInlineMarkdown(line)}</p>`;
     if (!line.trim()) return "<br>";
-    return `<p>${escapeHtml(line)}</p>`;
+    return `<p>${renderInlineMarkdown(line)}</p>`;
   }).join("");
 }
 
@@ -1579,17 +1650,27 @@ function renderBrief() {
   const markdown = brief.effective_markdown || "";
   const coverage = brief.source_coverage || {};
   const sections = brief.sections || [];
-  document.getElementById("briefRendered").innerHTML = markdownToHtml(markdown || "No EmailIntelBrief loaded.");
+  const briefRendered = document.getElementById("briefRendered");
+  briefRendered.innerHTML = markdownToHtml(markdown || "No EmailIntelBrief loaded.");
+  briefRendered.onclick = (event) => {
+    const link = event.target.closest("[data-source-uid]");
+    if (!link) return;
+    event.preventDefault();
+    event.stopPropagation();
+    state.selectedUid = link.dataset.sourceUid;
+    showView("evidence");
+    renderEvidence();
+  };
   document.getElementById("briefEditor").value = brief.review?.brief_override_markdown || "";
   document.getElementById("briefStatus").textContent =
     `${brief.object_type || "email_intel_brief"} ${brief.object_version || ""} · ${brief.source || "summary_file"} · status: ${brief.review?.brief_status || "draft"} · ${brief.path || ""}`;
   document.getElementById("briefSummary").innerHTML = [
     `<div class="stat"><strong>${sections.length}</strong><span>sections</span></div>`,
     `<div class="stat"><strong>${coverage.covered_count ?? 0}/${coverage.item_count ?? 0}</strong><span>source coverage</span></div>`,
-    `<div class="stat"><strong>${brief.source_index?.length || 0}</strong><span>source index rows</span></div>`,
+    `<div class="stat"><strong>${brief.source_index?.length || 0}</strong><span>inline sources</span></div>`,
     `<div class="stat"><strong>${coverage.complete ? "yes" : "no"}</strong><span>coverage complete</span></div>`,
   ].join("");
-  document.getElementById("sourceIndex").innerHTML = `<h3>来源索引</h3>` + (brief.source_index || []).map((source) =>
+  document.getElementById("sourceIndex").innerHTML = `<h3>正文来源</h3>` + (brief.source_index || []).map((source) =>
     `<button data-source-uid="${escapeHtml(source.source_uid || source.uid)}">UID ${escapeHtml(source.uid)} · ${escapeHtml(source.subject)}</button>`
   ).join("");
   for (const button of document.querySelectorAll("[data-source-uid]")) {
