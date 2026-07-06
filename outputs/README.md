@@ -60,6 +60,24 @@ export PODSUM_PYTHON="/opt/podsum/.venv/bin/python"
 
 `PODSUM_PYTHON` is used by generated commands and examples. launchd/systemd jobs should still start Podsum with the virtual-environment Python directly, using an absolute path.
 
+The email EvidencePack scanner can use a small Node helper based on
+`nodemailer/mailparser` for MIME/HTML email cleaning. Install its dependencies
+in the deployed `outputs/` directory:
+
+```sh
+cd "/Users/admin/Library/Application Support/Podsum/outputs"
+npm install --omit=dev
+```
+
+If dependencies live elsewhere, point Podsum at that `node_modules` directory:
+
+```sh
+export PODSUM_EMAIL_MAILPARSER_NODE_PATH="/path/to/node_modules"
+```
+
+If the helper or its dependencies are unavailable, EvidencePack generation stops
+with an explicit error instead of falling back to the old Python parser.
+
 Check active feeds:
 
 ```sh

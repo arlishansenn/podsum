@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import shlex
@@ -356,6 +357,12 @@ class PodsumCliTest(unittest.TestCase):
 
         self.assertIn("邮件情报助理", prompt)
         self.assertIn("不要复述字段名或数据结构", prompt)
+        self.assertIn("正文不要出现 JSON、字段", prompt)
+        self.assertIn("只写有实质证据的发现", prompt)
+        self.assertIn("整段省略", prompt)
+        self.assertIn("直接省略", prompt)
+        self.assertIn("连小节标题一起省略", prompt)
+        self.assertNotIn("可以忽略什么", prompt)
         self.assertIn("必须把来源嵌在正文对应内容里", prompt)
         self.assertIn("[UID 1001](email://2026-07-05/1001)", prompt)
         self.assertNotIn("## 来源索引", prompt)
@@ -365,15 +372,73 @@ class PodsumCliTest(unittest.TestCase):
         self.assertIn("引导对象: EmailTopicMap", prompt)
         self.assertIn("处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief", prompt)
         self.assertIn("合并重复、营销、低信号邮件", prompt)
-        self.assertIn("topic_hits", prompt)
-        self.assertIn("items[].topics", prompt)
-        self.assertIn("## 跟踪话题", prompt)
+        self.assertIn("跟踪话题提示", prompt)
+        self.assertIn("## 跟踪话题（只列有实质发现的主题）", prompt)
         self.assertIn("EmailEvidencePack", prompt)
-        self.assertIn("`snippet` / `email_snippet_evidence` 是邮件片段", prompt)
-        self.assertIn("fetched_public_link_evidence", prompt)
-        self.assertIn("evidence_boundaries", prompt)
+        self.assertIn("邮件片段不是完整正文", prompt)
+        self.assertIn("已抓取公开网页证据优先", prompt)
+        self.assertIn("证据边界可以自然写成", prompt)
         self.assertIn("不要把来源集中放到末尾", prompt)
-        self.assertIn("possibly_truncated=true", prompt)
+        self.assertIn("触达上限，可能有遗漏", prompt)
+
+    def test_email_intel_brief_prunes_empty_signal_sections(self) -> None:
+        markdown = textwrap.dedent(
+            """
+            # Podsum Email Summary 2026-07-06
+
+            ## 今天先看
+
+            今天没有明确需要立即回复或决策的邮件。
+
+            今天没有必须立刻处理的个人事务邮件。
+
+            唯一值得人工看一眼的是 RWA 快讯。[UID 1020](email://2026-07-06/1020)
+
+            ## 跟踪话题
+
+            ### VIS / NB / 可视化工作对象
+
+            今天没有可用信息。Nikkei 邮件里只看到关键词命中，没有具体标题、链接或正文。
+
+            ### RWA / Credit / 金融基础设施
+
+            RWA 方向继续有行业密集变化的迹象。[UID 1020](email://2026-07-06/1020)
+
+            ## 值得知道
+
+            今天不形成可用判断。
+
+            两封 Nikkei Asia 每日新闻邮件只显示“有文章匹配订阅关键词”，但没有具体标题、链接或正文。
+
+            同一封快讯还包含一个 Binance Square 链接，但当前摘要没有可读标题或正文，不能提炼观点。
+
+            Nikkei Asia 有两封每日新闻匹配提醒。邮件摘要没有露出具体文章标题或正文内容，不能据此形成 AI 行业、VIS/NB、教育 PBL 或写作交付方面的实质判断。
+
+            SMTP 测试邮件说明发送链路至少完成过一次测试投递。它没有业务内容，但对本地邮件摘要链路有意义。[UID 1018](email://2026-07-06/1018)
+
+            这条快讯涉及 RWA、合规和稳定币，不能从这两封邮件里提炼 AI 行业、VIS/NB 或 PBL 的可靠判断。
+            """
+        )
+
+        pruned = email_summary.prune_empty_signal_sections(markdown)
+
+        self.assertIn("唯一值得人工看一眼的是 RWA 快讯", pruned)
+        self.assertIn("RWA / Credit / 金融基础设施", pruned)
+        self.assertIn("SMTP 测试邮件说明发送链路", pruned)
+        self.assertNotIn("今天没有明确需要", pruned)
+        self.assertNotIn("没有必须立刻", pruned)
+        self.assertNotIn("VIS / NB / 可视化工作对象", pruned)
+        self.assertNotIn("不形成可用判断", pruned)
+        self.assertNotIn("没有可用信息", pruned)
+        self.assertNotIn("只显示“有文章匹配", pruned)
+        self.assertNotIn("Binance Square", pruned)
+        self.assertNotIn("没有露出具体文章标题", pruned)
+        self.assertNotIn("不能据此形成", pruned)
+        self.assertNotIn("不能提炼观点", pruned)
+        self.assertIn("SMTP 测试邮件说明发送链路", pruned)
+        self.assertNotIn("没有业务内容", pruned)
+        self.assertNotIn("不能从", pruned)
+        self.assertNotIn("可靠判断", pruned)
 
     def test_email_link_policy_parses_from_markdown(self) -> None:
         policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
@@ -450,7 +515,39 @@ class PodsumCliTest(unittest.TestCase):
             subtype="html",
         )
 
-        item = email_summary.message_item("55", message.as_bytes(), policy)
+        original = email_summary.mailparser_cleaned_message
+
+        def fake_cleaned_message(raw_message: bytes) -> dict:
+            self.assertIn(b"Fixture Newsletter", raw_message)
+            return {
+                "snippet": "Plain lead before https://example.invalid/plain-article and plain tail after the link.",
+                "links": [
+                    {
+                        "url": "https://example.invalid/plain-article",
+                        "anchor_text": "",
+                        "context": "Plain lead before https://example.invalid/plain-article and plain tail after the link.",
+                        "source_content_type": "text/plain",
+                        "position": "0",
+                    },
+                    {
+                        "url": "https://example.invalid/html-article",
+                        "anchor_text": "Read HTML article",
+                        "context": "Read HTML article",
+                        "source_content_type": "text/html",
+                        "position": "1",
+                    },
+                ],
+                "body_part_count": 2,
+                "body_part_types": ["text/plain", "text/html"],
+                "attachment_count": 0,
+                "attachment_shapes": [],
+            }
+
+        email_summary.mailparser_cleaned_message = fake_cleaned_message
+        try:
+            item = email_summary.message_item("55", message.as_bytes(), policy)
+        finally:
+            email_summary.mailparser_cleaned_message = original
         snippet_evidence = [evidence for evidence in item["evidence"] if evidence.get("type") == "email_snippet"]
 
         self.assertEqual(item["body_part_count"], 2)
@@ -461,6 +558,149 @@ class PodsumCliTest(unittest.TestCase):
         self.assertEqual(snippet_evidence[0]["uid"], "55")
         self.assertEqual(snippet_evidence[0]["link_count"], 2)
         self.assertEqual(snippet_evidence[0]["body_part_count"], 2)
+
+    def test_email_message_item_uses_informative_body_block_not_preview_padding(self) -> None:
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        message = EmailMessage()
+        message["From"] = "Daily Digest <digest@example.invalid>"
+        message["To"] = "Fixture Receiver <receiver@example.invalid>"
+        message["Subject"] = "Daily keyword digest"
+        message["Date"] = "Sun, 05 Jul 2026 08:00:00 +0800"
+        message.set_content(
+            "Here are new articles that match your following keywords.\n"
+            + ("\u200c \u200d\u200e\u200f\ufeff " * 24)
+            + "\nFrontier AI teams are moving agent workbenches into regulated enterprise deployments."
+        )
+
+        original = email_summary.mailparser_cleaned_message
+
+        def fake_cleaned_message(raw_message: bytes) -> dict:
+            self.assertIn(b"Daily keyword digest", raw_message)
+            return {
+                "snippet": "Frontier AI teams are moving agent workbenches into regulated enterprise deployments.",
+                "links": [],
+                "body_part_count": 1,
+                "body_part_types": ["text/plain"],
+                "attachment_count": 0,
+                "attachment_shapes": [],
+            }
+
+        email_summary.mailparser_cleaned_message = fake_cleaned_message
+        try:
+            item = email_summary.message_item("preview-1", message.as_bytes(), policy)
+        finally:
+            email_summary.mailparser_cleaned_message = original
+        snippet_evidence = [evidence for evidence in item["evidence"] if evidence.get("type") == "email_snippet"]
+
+        self.assertIn("Frontier AI teams", item["snippet"])
+        self.assertNotIn("Here are new articles", item["snippet"])
+        self.assertIn("Frontier AI teams", snippet_evidence[0]["excerpt"])
+        self.assertNotIn("Here are new articles", snippet_evidence[0]["excerpt"])
+        self.assertEqual(snippet_evidence[0]["reason"], "snippet_only")
+
+    def test_email_message_item_prefers_mailparser_cleaned_payload(self) -> None:
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        message = EmailMessage()
+        message["From"] = "Daily Digest <digest@example.invalid>"
+        message["To"] = "Fixture Receiver <receiver@example.invalid>"
+        message["Subject"] = "Daily keyword digest"
+        message["Date"] = "Sun, 05 Jul 2026 08:00:00 +0800"
+        message.set_content(
+            "Here are new articles that match your following keywords.\n"
+            "unsubscribe\n"
+            "https://tracker.example.invalid/noisy"
+        )
+
+        original = email_summary.mailparser_cleaned_message
+
+        def fake_cleaned_message(raw_message: bytes) -> dict:
+            self.assertIn(b"Daily keyword digest", raw_message)
+            return {
+                "snippet": "Clean article title - Clean useful excerpt",
+                "links": [
+                    {
+                        "url": "https://example.invalid/article",
+                        "anchor_text": "Clean article title",
+                        "context": "Clean useful excerpt",
+                        "source_content_type": "text/html",
+                        "position": "0",
+                    }
+                ],
+                "body_part_count": 2,
+                "body_part_types": ["text/plain", "text/html"],
+                "attachment_count": 0,
+                "attachment_shapes": [],
+            }
+
+        email_summary.mailparser_cleaned_message = fake_cleaned_message
+        try:
+            item = email_summary.message_item("preview-2", message.as_bytes(), policy)
+        finally:
+            email_summary.mailparser_cleaned_message = original
+
+        self.assertEqual(item["snippet"], "Clean article title - Clean useful excerpt")
+        self.assertEqual(len(item["links"]), 1)
+        self.assertEqual(item["links"][0]["url"], "https://example.invalid/article")
+        self.assertEqual(item["links"][0]["anchor_text"], "Clean article title")
+        self.assertNotIn("Here are new articles", item["snippet"])
+        self.assertNotIn("unsubscribe", item["snippet"])
+        self.assertEqual(item["body_part_count"], 2)
+        self.assertEqual(set(item["body_part_types"]), {"text/plain", "text/html"})
+
+    def test_email_message_item_fails_when_mailparser_helper_is_unavailable(self) -> None:
+        original_paths = email_summary.mailparser_node_module_paths
+        original_node = os.environ.get("PODSUM_NODE")
+        message = EmailMessage()
+        message["From"] = "Daily Digest <digest@example.invalid>"
+        message["To"] = "Fixture Receiver <receiver@example.invalid>"
+        message["Subject"] = "Daily keyword digest"
+        message.set_content("Useful body")
+
+        email_summary.mailparser_node_module_paths = lambda: []
+        os.environ["PODSUM_NODE"] = "node"
+        try:
+            with self.assertRaisesRegex(RuntimeError, "mailparser helper dependencies are missing"):
+                email_summary.message_item("missing-helper", message.as_bytes(), email_summary.DEFAULT_POLICY)
+        finally:
+            email_summary.mailparser_node_module_paths = original_paths
+            if original_node is None:
+                os.environ.pop("PODSUM_NODE", None)
+            else:
+                os.environ["PODSUM_NODE"] = original_node
+
+    def test_normalize_evidence_pack_recomputes_low_signal_legacy_snippet_evidence(self) -> None:
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        scan = {
+            "date": "2026-07-05",
+            "items": [
+                {
+                    "uid": "legacy-preview",
+                    "from": "Daily Digest <digest@example.invalid>",
+                    "subject": "Daily keyword digest",
+                    "snippet": "Here are new articles that match your following keywords. \u200c \u200d\u200e\u200f\ufeff",
+                    "evidence": [
+                        {
+                            "type": "email_snippet",
+                            "status": "available",
+                            "reason": "snippet_only",
+                            "excerpt": "Here are new articles that match your following keywords. \u200c \u200d\u200e\u200f\ufeff",
+                        }
+                    ],
+                    "risks": ["snippet_only"],
+                }
+            ],
+        }
+
+        normalized = email_summary.normalize_evidence_pack(scan, policy)
+        item = normalized["items"][0]
+        snippet_evidence = [evidence for evidence in item["evidence"] if evidence.get("type") == "email_snippet"]
+
+        self.assertEqual(item["snippet"], "")
+        self.assertNotIn("Here are new articles", snippet_evidence[0]["excerpt"])
+        self.assertIn("Subject=Daily keyword digest", snippet_evidence[0]["excerpt"])
+        self.assertEqual(snippet_evidence[0]["reason"], "metadata_only")
+        self.assertNotIn("snippet_only", item["risks"])
+        self.assertIn("metadata_only", item["risks"])
 
     def test_email_evidence_agent_fake_link_classifier_writes_audit_fields(self) -> None:
         def fixture_fetcher(url: str, timeout: int, excerpt_chars: int) -> dict:
@@ -715,6 +955,65 @@ class PodsumCliTest(unittest.TestCase):
         self.assertEqual(composition.email_intel_brief.source_coverage["need_ids"], [need["need_id"]])
         self.assertNotIn("待外部验证", composition.email_intel_brief.markdown)
         self.assertNotIn("claim_or_question", composition.email_intel_brief.markdown)
+
+    def test_email_brief_does_not_inline_all_need_ids_in_each_gap(self) -> None:
+        scan = {
+            "object_type": "email_evidence_pack",
+            "object_version": email_summary.EVIDENCE_PACK_VERSION,
+            "status": "ready_for_summary",
+            "date": "2026-07-05",
+            "account": "fixture@example.invalid",
+            "window": "1d",
+            "scan_limit": 10,
+            "raw_count": 2,
+            "possibly_truncated": False,
+            "items": [
+                {
+                    "uid": "77",
+                    "date": "Sun, 05 Jul 2026 08:00:00 +0800",
+                    "from": "Fixture Sender <sender@example.invalid>",
+                    "subject": "Decision one",
+                    "snippet": "First snippet-only signal.",
+                    "has_attachments": False,
+                    "email_type": "personal",
+                    "links": [],
+                    "evidence": [{"type": "email_snippet", "status": "available", "excerpt": "First snippet-only signal."}],
+                    "risks": ["snippet_only"],
+                    "flags": [],
+                    "topics": [{"id": "decision", "name": "Decision", "priority": "high"}],
+                },
+                {
+                    "uid": "78",
+                    "date": "Sun, 05 Jul 2026 08:05:00 +0800",
+                    "from": "Fixture Sender <sender@example.invalid>",
+                    "subject": "Decision two",
+                    "snippet": "Second snippet-only signal.",
+                    "has_attachments": False,
+                    "email_type": "personal",
+                    "links": [],
+                    "evidence": [{"type": "email_snippet", "status": "available", "excerpt": "Second snippet-only signal."}],
+                    "risks": ["snippet_only"],
+                    "flags": [],
+                    "topics": [{"id": "decision", "name": "Decision", "priority": "high"}],
+                },
+            ],
+            "topic_map": {"object_type": "email_topic_map", "version": 1, "topics": [], "topic_count": 1},
+            "topic_hits": [],
+        }
+
+        composition = brief_agent.compose_with_need_store(
+            EmailEvidencePack.from_dict(scan),
+            scan["topic_map"],
+            need_store.empty_need_store(),
+            "",
+            {},
+            "",
+        )
+        markdown = composition.email_intel_brief.markdown
+
+        self.assertEqual(markdown.count("need-2026-07-05-decision-77-snippet-only"), 1)
+        self.assertEqual(markdown.count("need-2026-07-05-decision-78-snippet-only"), 1)
+        self.assertIn("证据需求见文末「证据需求」", markdown)
 
     def test_email_need_reconciliation_fulfills_and_stales_from_future_scans_without_external_calls(self) -> None:
         day1_scan = {
@@ -1296,8 +1595,54 @@ class PodsumCliTest(unittest.TestCase):
 
         self.assertEqual(used, 0)
         self.assertEqual(item["links"][0]["policy_decision"], "skip")
-        self.assertEqual(link_evidence[0]["status"], "skipped")
-        self.assertIn("track", link_evidence[0]["reason"])
+        self.assertEqual(link_evidence, [])
+        self.assertIn("tracking_skipped", item["risks"])
+
+    def test_normalize_evidence_pack_prunes_legacy_skipped_public_link_evidence(self) -> None:
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        scan = email_summary.normalize_evidence_pack(
+            {
+                "date": "2026-07-05",
+                "items": [
+                    {
+                        "uid": "1009",
+                        "from": "Google Alerts <googlealerts-noreply@google.com>",
+                        "subject": "Google Alert - 巴菲特",
+                        "snippet": "巴菲特 alert",
+                        "links": [{"url": "https://www.google.com.hk/alerts/share?x=1"}],
+                        "evidence": [
+                            {
+                                "type": "public_link",
+                                "uid": "1009",
+                                "url": "https://www.google.com.hk/alerts/share?x=1",
+                                "status": "skipped",
+                                "reason": "hard_skip:share",
+                            },
+                            {
+                                "type": "public_link",
+                                "uid": "1009",
+                                "url": "https://finance.sina.com.cn/stock/usstock/c/2025-06-30/doc-ineycazv5737211.shtml",
+                                "final_url": "https://finance.sina.com.cn/stock/usstock/c/2025-06-30/doc-ineycazv5737211.shtml?oid=WA+0859+3970+0884+RAB+Bangun+Plafon+Gypsum+Buat+Kamar+Murah+Banyumanik+Semarang&vt=4",
+                                "title": "巴菲特相关报道",
+                                "excerpt": "伯克希尔哈撒韦相关公开报道。",
+                                "status": "fetched",
+                                "content_type": "text/html",
+                            },
+                        ],
+                    }
+                ],
+            },
+            policy,
+        )
+        evidence = scan["items"][0]["evidence"]
+        public_links = [entry for entry in evidence if entry.get("type") == "public_link"]
+
+        self.assertTrue(any(entry.get("type") == "email_snippet" for entry in evidence))
+        self.assertEqual(len(public_links), 1)
+        self.assertEqual(public_links[0]["status"], "fetched")
+        self.assertEqual(public_links[0]["final_url"], "https://finance.sina.com.cn/stock/usstock/c/2025-06-30/doc-ineycazv5737211.shtml")
+        self.assertNotIn("hard_skip:share", json.dumps(evidence, ensure_ascii=False))
+        self.assertNotIn("Bangun", json.dumps(evidence, ensure_ascii=False))
 
     def test_topic_guided_link_triage_selects_only_matching_canonical_targets(self) -> None:
         policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
@@ -1417,7 +1762,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertEqual(matched["items"][0]["link_triage"]["selected_fetch_count"], 1)
         self.assertEqual(matched["items"][0]["link_triage"]["groups"][0]["decision"], "fetch")
 
-    def test_email_link_budget_exhaustion_writes_skipped_evidence(self) -> None:
+    def test_email_link_budget_exhaustion_marks_links_without_skipped_evidence(self) -> None:
         policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
         policy["limits"]["max_links_total"] = 1
         policy["limits"]["max_links_per_email"] = 1
@@ -1468,10 +1813,9 @@ class PodsumCliTest(unittest.TestCase):
 
         self.assertEqual(first_link_evidence[0]["status"], "fetched")
         self.assertEqual(first_link_evidence[0]["uid"], "first")
-        self.assertEqual(second_link_evidence[0]["status"], "skipped")
-        self.assertEqual(second_link_evidence[0]["reason"], "link_budget_exhausted")
-        self.assertEqual(second_link_evidence[0]["uid"], "second")
+        self.assertEqual(second_link_evidence, [])
         self.assertEqual(enriched["items"][1]["links"][0]["policy_decision"], "skip")
+        self.assertIn("link_budget_exhausted", enriched["items"][1]["risks"])
 
     def test_email_review_checklist_flags_missing_traceability(self) -> None:
         scan = {
@@ -2317,12 +2661,140 @@ class PodsumCliTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             prompt = prompt_path.read_text(encoding="utf-8")
-            self.assertIn("email_topic_map", prompt)
+            self.assertIn("email_evidence_digest", prompt)
+            self.assertIn("source_object_type", prompt)
             self.assertIn("topic_hits", prompt)
             self.assertIn("EmailEvidencePack", prompt)
             self.assertIn("newsletter_article", prompt)
             self.assertIn("Public article excerpt for evidence-aware summary.", prompt)
             self.assertIn("https://example.invalid/article", prompt)
+
+    def test_email_summary_uses_llm_evidence_preprocess_digest(self) -> None:
+        prompts: list[str] = []
+        scan = {
+            "object_type": "email_evidence_pack",
+            "object_version": "0.1",
+            "status": "enriched",
+            "date": "2026-07-05",
+            "account": "fixture@example.invalid",
+            "window": "1d",
+            "scan_limit": 10,
+            "raw_count": 1,
+            "possibly_truncated": False,
+            "topic_hits": [{"id": "markets", "name": "Markets", "priority": "normal", "item_uids": ["1009"]}],
+            "items": [
+                {
+                    "uid": "1009",
+                    "date": "Sun, 05 Jul 2026 08:00:00 +0800",
+                    "from": "Google Alerts <googlealerts-noreply@google.com>",
+                    "subject": "Google Alert - 巴菲特",
+                    "snippet": "巴菲特 <https://www.google.com.hk/alerts/share?x=1> hard_skip:share Bangun Plafon tracking noise",
+                    "email_type": "google_alert",
+                    "links": [{"url": "https://www.google.com.hk/alerts/share?x=1", "policy_decision": "skip"}],
+                    "link_triage": {
+                        "hard_skipped_count": 40,
+                        "groups": [{"decision": "skip", "reason": "hard_skip:share", "url": "https://www.google.com.hk/alerts/share?x=1"}],
+                    },
+                    "evidence": [
+                        {
+                            "type": "email_snippet",
+                            "status": "available",
+                            "excerpt": "巴菲特 alert snippet with tracking noise",
+                        },
+                        {
+                            "type": "public_link",
+                            "url": "https://www.google.com.hk/alerts/share?x=1",
+                            "status": "skipped",
+                            "reason": "hard_skip:share",
+                            "classification": "navigation",
+                            "decision_reason": "hard_skip:share",
+                        },
+                        {
+                            "type": "public_link",
+                            "url": "https://finance.sina.com.cn/stock/usstock/c/2025-06-30/doc-ineycazv5737211.shtml",
+                            "final_url": "https://finance.sina.com.cn/stock/usstock/c/2025-06-30/doc-ineycazv5737211.shtml",
+                            "title": "巴菲特相关报道",
+                            "excerpt": "伯克希尔哈撒韦相关公开报道。",
+                            "status": "fetched",
+                            "content_type": "text/html",
+                            "classification": "content",
+                            "decision_reason": "eligible_public_link",
+                        },
+                    ],
+                    "risks": ["link_skipped"],
+                    "flags": [],
+                    "topics": [{"id": "markets", "name": "Markets", "priority": "normal"}],
+                }
+            ],
+        }
+
+        def fake_run_hermes_prompt(hermes: str, prompt: str, cwd: str, timeout: int) -> tuple[bool, str]:
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return True, json.dumps(
+                    {
+                        "object_type": "email_evidence_digest",
+                        "items": [
+                            {
+                                "uid": "1009",
+                                "source_ref": "email://2026-07-05/1009",
+                                "clean_summary": "巴菲特相关公开报道需要人工复核。",
+                                "key_facts": ["伯克希尔相关报道来自新浪财经。"],
+                                "public_sources": [
+                                    {
+                                        "title": "新浪财经报道",
+                                        "url": "https://finance.sina.com.cn/stock/usstock/c/2025-06-30/doc-ineycazv5737211.shtml?oid=WA+0859+3970+0884+RAB+Bangun+Plafon+Gypsum+Buat+Kamar+Murah+Banyumanik+Semarang&vt=4",
+                                        "claim": "公开报道提到伯克希尔相关信息。",
+                                        "evidence_excerpt": "伯克希尔哈撒韦相关公开报道。",
+                                        "reason": "should_not_leak",
+                                    }
+                                ],
+                                "evidence_limits": ["Google Alerts 只提供摘要。"],
+                                "link_triage": {"reason": "hard_skip:share"},
+                                "reason": "hard_skip:share",
+                                "decision": "skip",
+                                "classification": "content",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+            return True, "# Podsum Email Summary 2026-07-05\n\n巴菲特相关报道 [UID 1009](email://2026-07-05/1009)\n"
+
+        args = argparse.Namespace(
+            summary_engine="hermes",
+            dry_run=False,
+            email_summary_prompt=ROOT / "outputs" / "email_summary_prompt.md",
+            email_evidence_preprocess_prompt=ROOT / "outputs" / "email_evidence_preprocess_prompt.md",
+            hermes=Path("/bin/echo"),
+            project_dir=ROOT,
+            hermes_timeout=180,
+            no_llm_evidence_preprocess=False,
+        )
+        original = email_summary.run_hermes_prompt
+        try:
+            email_summary.run_hermes_prompt = fake_run_hermes_prompt
+            rendered = email_summary.render_report(args, scan)
+        finally:
+            email_summary.run_hermes_prompt = original
+
+        self.assertIn("[UID 1009](email://2026-07-05/1009)", rendered)
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("email_evidence_pack_llm_brief_input", prompts[0])
+        self.assertIn("google.com.hk/alerts/share", prompts[0])
+        final_prompt = prompts[1]
+        self.assertIn("email_evidence_digest", final_prompt)
+        self.assertIn("巴菲特相关公开报道需要人工复核", final_prompt)
+        self.assertIn("https://finance.sina.com.cn/stock/usstock/c/2025-06-30/doc-ineycazv5737211.shtml", final_prompt)
+        self.assertNotIn("google.com.hk/alerts/share", final_prompt)
+        self.assertNotIn("Bangun", final_prompt)
+        self.assertNotIn("oid=", final_prompt)
+        self.assertNotIn("hard_skip", final_prompt)
+        self.assertNotIn("should_not_leak", final_prompt)
+        self.assertNotIn("\"link_triage\"", final_prompt)
+        self.assertNotIn("\"reason\"", final_prompt)
+        self.assertNotIn("\"decision\"", final_prompt)
+        self.assertNotIn("\"classification\"", final_prompt)
 
     def test_email_summary_llm_input_filters_raw_link_noise(self) -> None:
         noisy_context = "tracking pixel hidden html " * 200

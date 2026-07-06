@@ -1,0 +1,9 @@
+{
+  "name": "podsum-email-helpers",
+  "private": true,
+  "type": "commonjs",
+  "dependencies": {
+    "jsdom": "^29.1.1",
+    "mailparser": "^3.9.14"
+  }
+}

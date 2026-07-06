@@ -10,7 +10,12 @@ __pycache__/
 .venv/
 venv/
 
+# Node helpers
+node_modules/
+
 # Local test and runtime data
+.codex/
+outputs/email_extractor_experiment/
 work/
 state.json
 feishu_sent.json

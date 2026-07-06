@@ -228,10 +228,10 @@ def _brief_from_markdown(
 def _replace_vague_need_text(markdown: str, emitted_needs: list[EvidenceNeed]) -> str:
     if not emitted_needs:
         return markdown
-    need_ids = "、".join(emitted_need.need_id for emitted_need in emitted_needs)
-    text = markdown.replace("仅基于邮件摘要或待外部验证", f"仅基于邮件摘要；证据缺口以 need_id 跟踪：{need_ids}")
-    text = text.replace("；待外部验证", f"；证据缺口见 need_id：{need_ids}")
-    return text.replace("待外部验证", f"证据缺口见 need_id：{need_ids}")
+    reference = "证据需求见文末「证据需求」"
+    text = markdown.replace("仅基于邮件摘要或待外部验证", f"仅基于邮件摘要；{reference}")
+    text = text.replace("；待外部验证", f"；{reference}")
+    return text.replace("待外部验证", reference)
 
 
 def _append_need_references(markdown: str, emitted_needs: list[EvidenceNeed]) -> str:

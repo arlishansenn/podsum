@@ -1337,6 +1337,28 @@ function badge(value, kind = "") {
   return `<span class="badge ${kind}">${escapeHtml(value)}</span>`;
 }
 
+function riskLabel(value) {
+  return {
+    link_budget_exhausted: "public source budget reached",
+    link_failed: "public source fetch failed",
+    link_skipped: "non-content links omitted",
+    tracking_skipped: "tracking links omitted",
+    snippet_only: "snippet only",
+    unmapped_alert_topic: "no tracked topic match",
+    metadata_only: "metadata only",
+  }[value] || value;
+}
+
+function linkDecisionLabel(value) {
+  return {
+    fetch: "public source",
+    defer: "not selected",
+    skip: "omitted",
+    dedupe: "duplicate",
+    pending: "pending",
+  }[value] || value;
+}
+
 function sourceUidFromUrl(url) {
   const match = String(url || "").match(/^email:\/\/[^/]+\/([^`\s)\],。；，]+)/);
   return match ? match[1] : "";
@@ -1453,7 +1475,7 @@ function healthLabel(health) {
     usable: "usable snippet",
     weak: "weak snippet",
     failed: "link failed",
-    skipped: "link skipped",
+    skipped: "link omitted",
   }[health] || health;
 }
 
@@ -1505,14 +1527,14 @@ function renderEvidence() {
     `<div class="stat"><strong>${healthCounts.usable || 0}</strong><span>usable snippet only</span></div>`,
   ].join("");
   fillFilter("typeFilter", "", "all types", Object.keys(typeCounts));
-  fillFilter("riskFilter", "", "all risks", Object.keys(riskCounts));
+  fillFilter("riskFilter", "", "all risks", Object.keys(riskCounts), riskLabel);
   const itemsToShow = filteredItems();
   if (!state.selectedUid && itemsToShow[0]) state.selectedUid = String(itemsToShow[0].uid || "");
   document.getElementById("emailList").innerHTML = itemsToShow.map((item) => {
     const review = item._review || {};
     const uid = String(item.uid || "");
     const health = evidenceHealth(item);
-    const riskBadges = (item.risks || []).slice(0, 3).map((risk) => badge(risk, "warn")).join(" ");
+    const riskBadges = (item.risks || []).slice(0, 3).map((risk) => badge(riskLabel(risk), "warn")).join(" ");
     const topicBadges = (item.topics || []).slice(0, 3).map((topic) => badge(topicLabel(topic), "usable")).join(" ");
     const linkCount = (item.links || []).length;
     const pendingLinks = (item.links || []).filter((link) => !link.policy_decision || link.policy_decision === "pending").length;
@@ -1533,11 +1555,11 @@ function renderEvidence() {
   renderEmailDetail(items.find((item) => String(item.uid || "") === state.selectedUid) || itemsToShow[0]);
 }
 
-function fillFilter(id, selected, label, values) {
+function fillFilter(id, selected, label, values, labeler = (value) => value) {
   const select = document.getElementById(id);
   const current = select.value;
   select.innerHTML = [`<option value="">${label}</option>`]
-    .concat(values.sort().map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`))
+    .concat(values.sort().map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(labeler(value))}</option>`))
     .join("");
   select.value = current || selected;
 }
@@ -1563,35 +1585,14 @@ function renderEmailDetail(item) {
       : policy.fetch_links
         ? "Review link evidence results before approving the Brief."
         : `No fetch: policy_no_fetch:${policy.name || "unknown"}.`;
-  const triage = item.link_triage || {};
-  const triageGroups = triage.groups || [];
-  const triageSummary = item.link_triage ? [
-      `total ${triage.total_links || 0}`,
-      `fetch ${triage.selected_fetch_count || 0}`,
-      `defer ${triage.deferred_count || 0}`,
-      `skip ${triage.hard_skipped_count || 0}`,
-      `dedupe ${triage.deduped_count || 0}`,
-      `unmapped ${triage.unmapped_topic_count || 0}`,
-    ].join(" · ") : "No link triage recorded.";
-  const triageRows = triageGroups.map((group) => `<tr>
-      <td>${escapeHtml(group.decision || "")}</td>
-      <td>${escapeHtml(group.reason || "")}</td>
-      <td>${escapeHtml((group.topics || []).map((topic) => topic.name || topic.id || "").join(", "))}</td>
-      <td>${escapeHtml(group.canonical_url || group.url || "")}</td>
-    </tr>`).join("");
-  const linkRows = links.map((link) => `<tr>
-      <td>${escapeHtml(link.policy_decision || "pending")}</td>
-      <td>${escapeHtml(link.anchor_text || "")}</td>
-      <td>${escapeHtml(link.context || "")}</td>
-      <td>${escapeHtml(link.url || "")}</td>
-    </tr>`).join("");
+  const linkSummary = `${linkEvidence.filter((ev) => ev.status === "fetched").length} fetched public source(s) from ${links.length} detected link(s).`;
   const evidenceRows = linkEvidence.map((ev) => `<li>
       ${badge(ev.status || "unknown", ev.status === "fetched" ? "good" : ev.status === "failed" ? "failed" : "skipped")}
       ${escapeHtml(ev.title || ev.reason || ev.url || "")}
       <br><span class="meta">${escapeHtml(ev.url || "")}</span>
       <br><span class="meta">${escapeHtml(ev.excerpt || "")}</span>
     </li>`).join("");
-  const riskBadges = (item.risks || []).map((risk) => badge(risk, "warn")).join(" ");
+  const riskBadges = (item.risks || []).map((risk) => badge(riskLabel(risk), "warn")).join(" ");
   const topicRows = (item.topics || []).map((topic) => `<li>
       ${badge(topicLabel(topic), topic.priority === "high" ? "good" : "usable")}
       <span class="meta">matched: ${escapeHtml((topic.matched_keywords || []).join(", "))}</span>
@@ -1612,17 +1613,9 @@ function renderEmailDetail(item) {
     <pre>${escapeHtml(baseEvidence.excerpt || item.snippet || "")}</pre>
 
     <h3>3. Link Decision</h3>
-    <p>${badge(policy.fetch_links ? "fetch links" : "snippet only", policy.fetch_links ? "good" : "skipped")} ${escapeHtml(policy.summary_focus || "")}</p>
+    <p>${badge(policy.fetch_links ? "public source lookup" : "snippet only", policy.fetch_links ? "good" : "skipped")} ${escapeHtml(policy.summary_focus || "")}</p>
     <p class="notice">${escapeHtml(nextAction)}</p>
-    <p class="meta">${escapeHtml(triageSummary)}</p>
-    <table>
-      <thead><tr><th>triage</th><th>reason</th><th>topics</th><th>canonical url</th></tr></thead>
-      <tbody>${triageRows || `<tr><td colspan="4">No triage groups.</td></tr>`}</tbody>
-    </table>
-    <table>
-      <thead><tr><th>decision</th><th>anchor</th><th>context</th><th>raw url</th></tr></thead>
-      <tbody>${linkRows || `<tr><td colspan="4">No links detected.</td></tr>`}</tbody>
-    </table>
+    <p class="meta">${escapeHtml(linkSummary)}</p>
 
     <h3>4. Link Evidence</h3>
     <ul>${evidenceRows || "<li>No public link evidence.</li>"}</ul>

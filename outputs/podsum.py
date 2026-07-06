@@ -473,6 +473,7 @@ def email_summary_args_from_podsum(args: argparse.Namespace) -> argparse.Namespa
         recent_days=args.email_recent_days,
         limit=args.email_limit,
         email_summary_prompt=args.email_summary_prompt,
+        email_evidence_preprocess_prompt=args.email_evidence_preprocess_prompt,
         email_link_policy=args.email_link_policy,
         email_topic_file=args.email_topic_file,
         summary_engine=args.email_summary_engine,
@@ -481,6 +482,7 @@ def email_summary_args_from_podsum(args: argparse.Namespace) -> argparse.Namespa
         target=args.target,
         hermes=args.hermes,
         hermes_timeout=args.hermes_timeout,
+        no_llm_evidence_preprocess=args.email_no_llm_evidence_preprocess,
         dry_run=args.email_dry_run,
         no_send=args.email_no_send,
         allow_imap_read=args.email_allow_imap_read,
@@ -621,10 +623,12 @@ def add_run_email_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--email-recent-days", type=int, default=email_summary.DEFAULT_RECENT_DAYS)
     parser.add_argument("--email-limit", type=int, default=email_summary.DEFAULT_LIMIT)
     parser.add_argument("--email-summary-prompt", type=Path, default=email_summary.DEFAULT_PROMPT)
+    parser.add_argument("--email-evidence-preprocess-prompt", type=Path, default=email_summary.DEFAULT_EVIDENCE_PREPROCESS_PROMPT)
     parser.add_argument("--email-link-policy", type=Path, default=email_summary.DEFAULT_LINK_POLICY)
     parser.add_argument("--email-topic-file", type=Path, default=email_summary.DEFAULT_TOPIC_FILE)
     parser.add_argument("--email-summary-engine", choices=("podsum", "hermes"), default=email_summary.DEFAULT_SUMMARY_ENGINE)
     parser.add_argument("--email-enrich-links", action="store_true")
+    parser.add_argument("--email-no-llm-evidence-preprocess", action="store_true")
     parser.add_argument("--email-dry-run", action="store_true")
     parser.add_argument("--email-no-send", action="store_true")
     parser.add_argument(
@@ -722,6 +726,8 @@ def normalize_args(args: argparse.Namespace) -> None:
         args.email_eml_dir = args.email_eml_dir.expanduser()
     if hasattr(args, "email_summary_prompt"):
         args.email_summary_prompt = args.email_summary_prompt.expanduser()
+    if hasattr(args, "email_evidence_preprocess_prompt"):
+        args.email_evidence_preprocess_prompt = args.email_evidence_preprocess_prompt.expanduser()
     if hasattr(args, "email_link_policy"):
         args.email_link_policy = args.email_link_policy.expanduser()
     if hasattr(args, "email_topic_file"):

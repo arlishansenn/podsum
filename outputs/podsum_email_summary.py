@@ -13,9 +13,12 @@ import imaplib
 import json
 import os
 import re
+import shutil
 import socket
 import ssl
+import subprocess
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -38,6 +41,7 @@ from podsum_core.delivery import run_hermes_prompt, send_hermes_file
 DEFAULT_OUTPUT_DIR = Path.home() / "Podcasts/AutoDownloads"
 DEFAULT_ENV_FILE = Path.home() / "Library/Application Support/Podsum/.env"
 DEFAULT_PROMPT = Path(__file__).with_name("email_summary_prompt.md")
+DEFAULT_EVIDENCE_PREPROCESS_PROMPT = Path(__file__).with_name("email_evidence_preprocess_prompt.md")
 DEFAULT_LINK_POLICY = Path(__file__).with_name("email_link_policy.md")
 DEFAULT_TOPIC_FILE = Path(__file__).with_name("topic.md")
 DEFAULT_STATE_FILE = Path.home() / "Library/Application Support/Podsum/state.json"
@@ -55,8 +59,29 @@ INTEL_BRIEF_VERSION = "0.1"
 SNIPPET_CHARS = 240
 LINK_EXCERPT_CHARS = 1200
 FETCH_BODY_CHARS = 4000
+MAILPARSER_CLEANER_TIMEOUT_SECONDS = 15
+MAILPARSER_SNIPPET_CHARS = 900
 USER_AGENT = "PodsumEmailSummary/1.0"
 URL_RE = re.compile(r"https?://[^\s<>)\"']+", re.IGNORECASE)
+BODY_BLOCK_TAG_RE = re.compile(r"</(?:p|div|li|tr|td|h[1-6])\s*>|<br\s*/?>", re.IGNORECASE)
+BODY_TOKEN_RE = re.compile(r"[a-z0-9]+|[\u4e00-\u9fff]", re.IGNORECASE)
+LOW_SIGNAL_BODY_HINTS = (
+    "view this email in your browser",
+    "view in browser",
+    "unsubscribe",
+    "manage preferences",
+    "manage your preferences",
+    "privacy policy",
+    "terms of use",
+    "all rights reserved",
+    "you received this email",
+    "this email was sent to",
+    "follow us",
+    "advertisement",
+    "sponsored",
+    "match your following keywords",
+    "new articles that match",
+)
 
 DEFAULT_POLICY: dict[str, Any] = {
     "object_type": "email_policy",
@@ -198,17 +223,81 @@ def parse_bool(value: str, default: bool) -> bool:
 
 
 def clean_text(value: str, limit: int = SNIPPET_CHARS) -> str:
+    value = remove_format_controls(value, " ")
     value = re.sub(r"\s+", " ", value).strip()
     if len(value) <= limit:
         return value
     return value[:limit].rstrip() + "..."
 
 
+def clean_mailparser_snippet(value: str) -> str:
+    value = remove_format_controls(value, " ")
+    lines = [re.sub(r"\s+", " ", line).strip() for line in value.splitlines()]
+    return clean_text("\n".join(line for line in lines if line), MAILPARSER_SNIPPET_CHARS)
+
+
+def remove_format_controls(value: str, replacement: str) -> str:
+    return "".join(replacement if unicodedata.category(char) in {"Cf", "Cs"} else char for char in value)
+
+
 def strip_html(value: str) -> str:
     return html.unescape(re.sub(r"<[^>]+>", " ", value))
 
 
+def body_text_from_part(part: dict[str, Any]) -> str:
+    text = str(part.get("text") or "")
+    if part.get("content_type") == "text/html":
+        text = BODY_BLOCK_TAG_RE.sub("\n", text)
+        text = strip_html(text)
+    return text
+
+
+def normalize_body_text_for_blocks(value: str) -> str:
+    value = remove_format_controls(html.unescape(value), "\n")
+    value = value.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [re.sub(r"[ \t\f\v]+", " ", line).strip() for line in value.split("\n")]
+    return "\n".join(line for line in lines if line)
+
+
+def body_text_blocks(value: str) -> list[str]:
+    normalized = normalize_body_text_for_blocks(value)
+    return [clean_text(block, 1000) for block in re.split(r"\n+", normalized) if clean_text(block, 1000)]
+
+
+def body_block_tokens(value: str) -> list[str]:
+    return BODY_TOKEN_RE.findall(value.lower())
+
+
+def is_low_signal_body_block(value: str) -> bool:
+    text = clean_text(value, 500)
+    if not text:
+        return True
+    tokens = body_block_tokens(text)
+    lowered = text.lower()
+    if len(tokens) < 4 and len(text) < 32:
+        return True
+    if any(hint in lowered for hint in LOW_SIGNAL_BODY_HINTS) and len(tokens) < 28:
+        return True
+    url_chars = sum(len(match.group(0)) for match in URL_RE.finditer(text))
+    non_url_tokens = body_block_tokens(URL_RE.sub("", text))
+    return bool(url_chars and url_chars / max(len(text), 1) > 0.75 and not non_url_tokens)
+
+
+def select_body_excerpt(parts: list[dict[str, Any]], limit: int = SNIPPET_CHARS) -> str:
+    preferred = [part for part in parts if part.get("content_type") == "text/plain"] or [
+        part for part in parts if part.get("content_type") == "text/html"
+    ]
+    blocks: list[str] = []
+    for part in preferred:
+        blocks.extend(body_text_blocks(body_text_from_part(part)))
+    for block in blocks:
+        if not is_low_signal_body_block(block):
+            return clean_text(block, limit)
+    return ""
+
+
 def normalize_url(value: str) -> str:
+    value = remove_format_controls(value, "")
     value = value.strip().rstrip(".,;:)]}'\"")
     parsed = urllib.parse.urlsplit(value)
     if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
@@ -345,6 +434,97 @@ def extract_links_from_body_parts(parts: list[dict[str, Any]]) -> list[dict[str,
         else:
             links.extend(extract_links_from_text(text, content_type or "text/plain"))
     return unique_links(links)
+
+
+def mailparser_node_module_paths() -> list[Path]:
+    paths: list[Path] = []
+    configured = os.environ.get("PODSUM_EMAIL_MAILPARSER_NODE_PATH", "")
+    for raw_path in configured.split(os.pathsep):
+        if raw_path.strip():
+            paths.append(Path(raw_path).expanduser())
+    paths.append(Path(__file__).with_name("node_modules"))
+    return [path for path in paths if path.is_dir()]
+
+
+def mailparser_cleaner_env() -> dict[str, str]:
+    node_module_paths = mailparser_node_module_paths()
+    if not node_module_paths:
+        raise RuntimeError(
+            "mailparser helper dependencies are missing. Run `npm install --omit=dev` "
+            "in the deployed outputs directory, or set PODSUM_EMAIL_MAILPARSER_NODE_PATH "
+            "to a node_modules directory containing mailparser and jsdom."
+        )
+    env = os.environ.copy()
+    existing = [entry for entry in env.get("NODE_PATH", "").split(os.pathsep) if entry]
+    env["NODE_PATH"] = os.pathsep.join([str(path) for path in node_module_paths] + existing)
+    return env
+
+
+def validate_mailparser_cleaned_payload(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise RuntimeError("mailparser helper returned a non-object JSON payload")
+    snippet = clean_mailparser_snippet(str(value.get("snippet") or ""))
+    links = value.get("links", [])
+    if not isinstance(links, list):
+        links = []
+    clean_links = unique_links([link for link in links if isinstance(link, dict)])
+    body_part_types = value.get("body_part_types", [])
+    if not isinstance(body_part_types, list):
+        body_part_types = []
+    body_part_types = sorted({clean_text(str(item), 80) for item in body_part_types if str(item).strip()})
+    attachment_shapes = value.get("attachment_shapes", [])
+    if not isinstance(attachment_shapes, list):
+        attachment_shapes = []
+    clean_attachment_shapes: list[dict[str, Any]] = []
+    for shape in attachment_shapes:
+        if not isinstance(shape, dict):
+            continue
+        clean_attachment_shapes.append(
+            {
+                "content_type": clean_text(str(shape.get("content_type") or "application/octet-stream"), 120),
+                "size_bytes": int(shape.get("size_bytes") or 0),
+            }
+        )
+    return {
+        "snippet": snippet,
+        "links": clean_links,
+        "body_part_count": int(value.get("body_part_count") or len(body_part_types)),
+        "body_part_types": body_part_types,
+        "attachment_count": int(value.get("attachment_count") or len(clean_attachment_shapes)),
+        "attachment_shapes": clean_attachment_shapes,
+    }
+
+
+def mailparser_cleaned_message(raw_message: bytes) -> dict[str, Any]:
+    node = os.environ.get("PODSUM_NODE") or shutil.which("node")
+    if not node:
+        raise RuntimeError("mailparser helper requires Node.js, but no node executable was found")
+    helper = Path(__file__).with_name("email_mailparser_cleaner.js")
+    if not helper.exists():
+        raise RuntimeError(f"mailparser helper script is missing: {helper}")
+    env = mailparser_cleaner_env()
+    try:
+        completed = subprocess.run(
+            [node, str(helper)],
+            input=raw_message,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            timeout=MAILPARSER_CLEANER_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"mailparser helper timed out after {MAILPARSER_CLEANER_TIMEOUT_SECONDS}s") from exc
+    except OSError as exc:
+        raise RuntimeError(f"failed to run mailparser helper: {exc}") from exc
+    if completed.returncode != 0:
+        stderr = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"mailparser helper failed with exit code {completed.returncode}: {clean_text(stderr, 300)}")
+    try:
+        parsed = json.loads(completed.stdout.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("mailparser helper returned invalid JSON") from exc
+    return validate_mailparser_cleaned_payload(parsed)
 
 
 def parse_policy_json(markdown: str) -> dict[str, Any]:
@@ -562,10 +742,7 @@ def body_snippet(message: Message) -> str:
 
 
 def body_snippet_from_parts(parts: list[dict[str, Any]]) -> str:
-    plain_texts = [str(part.get("text") or "") for part in parts if part.get("content_type") == "text/plain"]
-    html_texts = [strip_html(str(part.get("text") or "")) for part in parts if part.get("content_type") == "text/html"]
-    candidates = plain_texts or html_texts
-    return clean_text(" ".join(candidates))
+    return select_body_excerpt(parts)
 
 
 def attachment_shapes(message: Message) -> list[dict[str, Any]]:
@@ -643,6 +820,7 @@ def normalize_existing_evidence(item: dict[str, Any]) -> None:
     if not isinstance(evidence_items, list):
         item["evidence"] = []
         return
+    normalized: list[dict[str, Any]] = []
     for evidence in evidence_items:
         if not isinstance(evidence, dict):
             continue
@@ -656,6 +834,16 @@ def normalize_existing_evidence(item: dict[str, Any]) -> None:
             evidence.setdefault("source", "email")
         elif evidence.get("type") == "public_link":
             evidence.setdefault("source", "link")
+            clean_url = public_output_url(str(evidence.get("url") or ""))
+            clean_final_url = public_output_url(str(evidence.get("final_url") or evidence.get("url") or ""))
+            if clean_url:
+                evidence["url"] = clean_url
+            if clean_final_url:
+                evidence["final_url"] = clean_final_url
+        if evidence.get("type") == "public_link" and evidence.get("status") == "skipped":
+            continue
+        normalized.append(evidence)
+    item["evidence"] = normalized
 
 
 def refresh_email_snippet_evidence(item: dict[str, Any]) -> None:
@@ -664,10 +852,7 @@ def refresh_email_snippet_evidence(item: dict[str, Any]) -> None:
         if not isinstance(evidence, dict) or evidence.get("type") != "email_snippet":
             continue
         for key, value in defaults.items():
-            if key == "excerpt" and not evidence.get(key) and value:
-                evidence[key] = value
-            else:
-                evidence.setdefault(key, value)
+            evidence[key] = value
 
 
 def ensure_email_snippet_evidence(item: dict[str, Any]) -> None:
@@ -680,6 +865,8 @@ def ensure_email_snippet_evidence(item: dict[str, Any]) -> None:
     else:
         refresh_email_snippet_evidence(item)
     risks = set(item.get("risks", []))
+    risks.discard("snippet_only")
+    risks.discard("metadata_only")
     if not any(isinstance(evidence, dict) and evidence.get("status") == "fetched" for evidence in item["evidence"]):
         risks.add("snippet_only" if item.get("snippet") else "metadata_only")
     item["risks"] = sorted(risks)
@@ -688,20 +875,25 @@ def ensure_email_snippet_evidence(item: dict[str, Any]) -> None:
 def message_item(uid: str, raw_message: bytes, policy: dict[str, Any] | None = None) -> dict[str, Any]:
     msg = email.message_from_bytes(raw_message)
     fixture_uid = decode_header_value(msg.get("X-Podsum-Fixture-UID"))
-    body_parts = message_body_parts(msg)
-    attachments = attachment_shapes(msg)
+    cleaned = mailparser_cleaned_message(raw_message)
+    snippet = str(cleaned.get("snippet") or "")
+    links = cleaned.get("links", [])
+    attachments = cleaned.get("attachment_shapes", [])
+    attachment_count = int(cleaned.get("attachment_count") or len(attachments))
+    body_part_types = cleaned.get("body_part_types", [])
+    body_part_count = int(cleaned.get("body_part_count") or len(body_part_types))
     item = {
         "uid": fixture_uid or uid,
         "date": decode_header_value(msg.get("Date")),
         "from": decode_header_value(msg.get("From")),
         "subject": clean_text(decode_header_value(msg.get("Subject")), 120),
-        "snippet": body_snippet_from_parts(body_parts),
+        "snippet": snippet,
         "has_attachments": bool(attachments),
-        "attachment_count": len(attachments),
+        "attachment_count": attachment_count,
         "attachment_shapes": attachments,
-        "body_part_count": len(body_parts),
-        "body_part_types": sorted({str(part.get("content_type") or "") for part in body_parts if part.get("content_type")}),
-        "links": extract_links_from_body_parts(body_parts),
+        "body_part_count": body_part_count,
+        "body_part_types": body_part_types,
+        "links": links,
         "evidence": [],
         "risks": [],
         "flags": [],
@@ -862,8 +1054,11 @@ TRACKING_QUERY_KEYS = {
     "mc_cid",
     "mc_eid",
     "igshid",
+    "oid",
     "ref",
     "ref_src",
+    "spm",
+    "vt",
 }
 
 
@@ -909,6 +1104,10 @@ def canonical_link_target(url: str) -> str:
     if path != "/":
         path = path.rstrip("/") or "/"
     return urllib.parse.urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, query, "")) if parsed.scheme and parsed.netloc else ""
+
+
+def public_output_url(url: str) -> str:
+    return canonical_link_target(url) or normalize_url(url)
 
 
 def topic_candidate_text(item: dict[str, Any], link: dict[str, Any], canonical_url: str) -> str:
@@ -1086,20 +1285,15 @@ def link_evidence_payload(
 
 def skip_pending_links(item: dict[str, Any], reason: str) -> None:
     ensure_email_snippet_evidence(item)
-    existing_urls = public_link_evidence_urls(item)
-    evidence = [ev for ev in item.get("evidence", []) if isinstance(ev, dict)]
     skipped = 0
     for link in item.get("links", []):
         if not isinstance(link, dict):
             continue
         url = normalize_url(str(link.get("url") or ""))
-        if not url or url in existing_urls:
+        if not url:
             continue
         link["policy_decision"] = "skip"
-        evidence.append(link_evidence_payload(item, link, status="skipped", reason=reason))
-        existing_urls.add(url)
         skipped += 1
-    item["evidence"] = evidence
     if skipped:
         risks = set(item.get("risks", []))
         risks.add(reason)
@@ -1137,13 +1331,7 @@ def enrich_item_links(
         for link in item.get("links", []):
             if not isinstance(link, dict):
                 continue
-            url = normalize_url(str(link.get("url") or ""))
-            if url and url in existing_public_urls:
-                continue
             link["policy_decision"] = "skip"
-            evidence.append(link_evidence_payload(item, link, status="skipped", reason=reason))
-            if url:
-                existing_public_urls.add(url)
             risks.add("link_skipped")
         item["evidence"] = evidence
         item["risks"] = sorted(risks)
@@ -1174,6 +1362,9 @@ def enrich_item_links(
             context.setdefault("anchor_text", link.get("anchor_text", ""))
             context.setdefault("email_context", link.get("context", ""))
             context.setdefault("source_content_type", link.get("source_content_type", ""))
+            context["url"] = public_output_url(str(context.get("url") or canonical_url))
+            if context.get("final_url"):
+                context["final_url"] = public_output_url(str(context.get("final_url") or ""))
             evidence.append(link_evidence(context))
             if existing_key:
                 existing_public_urls.add(existing_key)
@@ -1185,9 +1376,6 @@ def enrich_item_links(
             else:
                 risks.add("link_skipped")
         elif decision == "skip":
-            evidence.append(link_evidence_payload(item, link, status="skipped", reason=reason, final_url=canonical_url))
-            if existing_key:
-                existing_public_urls.add(existing_key)
             risks.add("tracking_skipped" if "track" in reason or "unsubscribe" in reason else "link_skipped")
         elif decision == "defer" and reason == "defer:budget":
             risks.add("link_budget_exhausted")
@@ -1204,6 +1392,10 @@ def normalize_evidence_pack(scan: dict[str, Any], policy: dict[str, Any]) -> dic
     for item in scan.get("items", []):
         if not isinstance(item, dict):
             continue
+        item["snippet"] = select_body_excerpt(
+            [{"content_type": "text/plain", "text": clean_mailparser_snippet(str(item.get("snippet") or ""))}],
+            MAILPARSER_SNIPPET_CHARS,
+        )
         links = item.get("links", [])
         if isinstance(links, list) and links:
             item["links"] = unique_links([link for link in links if isinstance(link, dict)])
@@ -1497,6 +1689,216 @@ def llm_brief_input(scan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def public_source_digest(evidence: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in {
+            "title": clean_text(str(evidence.get("title") or ""), 180),
+            "url": public_output_url(str(evidence.get("final_url") or evidence.get("url") or "")),
+            "excerpt": clean_text(str(evidence.get("excerpt") or ""), 420),
+        }.items()
+        if value not in (None, "", [])
+    }
+
+
+def clean_digest_text_list(value: Any, limit: int = 8, chars: int = 220) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    cleaned: list[str] = []
+    for entry in value[:limit]:
+        text = clean_text(str(entry or ""), chars)
+        if text:
+            cleaned.append(text)
+    return cleaned
+
+
+def clean_digest_topic_relevance(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    cleaned: list[dict[str, Any]] = []
+    for entry in value[:8]:
+        if not isinstance(entry, dict):
+            continue
+        item = {
+            key: clean_text(str(entry.get(key) or ""), 160)
+            for key in ("id", "name", "relevance", "why")
+            if entry.get(key)
+        }
+        if item:
+            cleaned.append(item)
+    return cleaned
+
+
+def clean_digest_public_sources(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    cleaned: list[dict[str, Any]] = []
+    for entry in value[:4]:
+        if not isinstance(entry, dict):
+            continue
+        url = public_output_url(str(entry.get("url") or ""))
+        source = {
+            key: clean_text(str(entry.get(key) or ""), 420 if key in {"claim", "evidence_excerpt", "excerpt"} else 180)
+            for key in ("title", "claim", "evidence_excerpt", "excerpt")
+            if entry.get(key)
+        }
+        if url and not hard_skip_reason_for_url(url):
+            source["url"] = url
+        if source:
+            cleaned.append(source)
+    return cleaned
+
+
+def clean_digest_item(item: dict[str, Any], base: dict[str, Any]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for key in ("uid", "date", "from", "subject", "source_ref", "email_type"):
+        value = item.get(key) or base.get(key)
+        if value not in (None, "", []):
+            normalized[key] = clean_text(str(value), 240)
+    if item.get("clean_summary"):
+        normalized["clean_summary"] = clean_text(str(item.get("clean_summary") or ""), 700)
+    elif base.get("clean_summary"):
+        normalized["clean_summary"] = base["clean_summary"]
+    key_facts = clean_digest_text_list(item.get("key_facts"), chars=260)
+    if key_facts:
+        normalized["key_facts"] = key_facts
+    action_signal = str(item.get("action_signal") or "").strip()
+    if action_signal:
+        normalized["action_signal"] = clean_text(action_signal, 40)
+    topic_relevance = clean_digest_topic_relevance(item.get("topic_relevance"))
+    if topic_relevance:
+        normalized["topic_relevance"] = topic_relevance
+    elif base.get("topics"):
+        normalized["topics"] = base["topics"]
+    public_sources = clean_digest_public_sources(item.get("public_sources"))
+    if public_sources:
+        normalized["public_sources"] = public_sources
+    elif base.get("public_sources"):
+        normalized["public_sources"] = base["public_sources"]
+    evidence_limits = clean_digest_text_list(item.get("evidence_limits"), chars=220)
+    if evidence_limits:
+        normalized["evidence_limits"] = evidence_limits
+    elif base.get("evidence_limits"):
+        normalized["evidence_limits"] = base["evidence_limits"]
+    return {key: value for key, value in normalized.items() if value not in (None, "", [])}
+
+
+def deterministic_evidence_digest(scan: dict[str, Any], mode: str = "deterministic_fallback") -> dict[str, Any]:
+    return {
+        "object_type": "email_evidence_digest",
+        "source_object_type": scan.get("object_type", "email_evidence_pack"),
+        "source_object_version": scan.get("object_version", EVIDENCE_PACK_VERSION),
+        "date": scan.get("date"),
+        "account": scan.get("account"),
+        "window": scan.get("window"),
+        "scan_limit": scan.get("scan_limit"),
+        "raw_count": scan.get("raw_count"),
+        "possibly_truncated": scan.get("possibly_truncated"),
+        "topic_hits": [compact_topic_ref(hit) for hit in scan.get("topic_hits", []) if isinstance(hit, dict)],
+        "items": [
+            {
+                key: value
+                for key, value in {
+                    "uid": item.get("uid"),
+                    "date": item.get("date"),
+                    "from": item.get("from"),
+                    "subject": item.get("subject"),
+                    "source_ref": f"email://{scan.get('date')}/{item.get('uid')}",
+                    "email_type": item.get("email_type"),
+                    "clean_summary": clean_text(str(item.get("snippet") or ""), 600),
+                    "topics": [compact_topic_ref(topic) for topic in item.get("topics", []) if isinstance(topic, dict)],
+                    "public_sources": [public_source_digest(entry) for entry in fetched_public_link_evidence(item)[:4]],
+                    "evidence_limits": evidence_boundaries_for_llm(item),
+                }.items()
+                if value not in (None, "", [])
+            }
+            for item in scan.get("items", [])
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def json_object_from_text(value: str) -> dict[str, Any] | None:
+    text = value.strip()
+    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    if fence:
+        text = fence.group(1).strip()
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            parsed, _end = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def normalize_evidence_digest(value: dict[str, Any], scan: dict[str, Any], mode: str) -> dict[str, Any]:
+    fallback = deterministic_evidence_digest(scan, mode)
+    digest = value if isinstance(value, dict) else {}
+    items = digest.get("items")
+    if not isinstance(items, list):
+        return fallback
+    fallback_items = {
+        str(item.get("uid") or ""): item
+        for item in fallback.get("items", [])
+        if isinstance(item, dict)
+    }
+    seen_uids: set[str] = set()
+    normalized_items: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        uid = str(item.get("uid") or "")
+        if not uid or uid in seen_uids:
+            continue
+        base = fallback_items.get(uid, {})
+        if not base:
+            continue
+        normalized_items.append(clean_digest_item(item, base))
+        seen_uids.add(uid)
+    for uid, base in fallback_items.items():
+        if uid not in seen_uids:
+            normalized_items.append(base)
+    if not normalized_items:
+        return fallback
+    return {
+        "object_type": "email_evidence_digest",
+        "source_object_type": scan.get("object_type", "email_evidence_pack"),
+        "source_object_version": scan.get("object_version", EVIDENCE_PACK_VERSION),
+        "date": scan.get("date"),
+        "account": scan.get("account"),
+        "window": scan.get("window"),
+        "scan_limit": scan.get("scan_limit"),
+        "raw_count": scan.get("raw_count"),
+        "possibly_truncated": scan.get("possibly_truncated"),
+        "topic_hits": [compact_topic_ref(hit) for hit in scan.get("topic_hits", []) if isinstance(hit, dict)],
+        "items": normalized_items,
+    }
+
+
+def preprocessed_evidence_digest(args: argparse.Namespace, scan: dict[str, Any]) -> dict[str, Any]:
+    if getattr(args, "no_llm_evidence_preprocess", False):
+        return deterministic_evidence_digest(scan, "deterministic_no_llm")
+    seed_json = json.dumps(llm_brief_input(scan), ensure_ascii=False, indent=2)
+    prompt = args.email_evidence_preprocess_prompt.read_text(encoding="utf-8").format(
+        date=scan["date"],
+        account=scan.get("account", ""),
+        window=scan.get("window", ""),
+        raw_count=scan.get("raw_count", 0),
+        preprocess_input=seed_json,
+    )
+    ok, value = run_hermes_prompt(str(args.hermes), prompt, cwd=str(args.project_dir), timeout=args.hermes_timeout)
+    if not ok:
+        return deterministic_evidence_digest(scan, f"llm_preprocess_failed:{clean_text(value, 120)}")
+    parsed = json_object_from_text(value)
+    if not parsed:
+        return deterministic_evidence_digest(scan, "llm_preprocess_invalid_json")
+    return normalize_evidence_digest(parsed, scan, "llm_preprocess")
+
+
 def fetched_public_link_evidence(item: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         evidence
@@ -1778,6 +2180,104 @@ def ensure_intel_brief_traceability(markdown: str, scan: dict[str, Any]) -> str:
     return text.rstrip() + "\n"
 
 
+LOW_SIGNAL_BRIEF_PATTERNS = (
+    "没有可用信息",
+    "没有可用的新证据",
+    "没有有效新线索",
+    "没有实质性行业情报",
+    "没有真正可用",
+    "没有直接线索",
+    "没有直接涉及",
+    "今天没有可用",
+    "没有看到必须",
+    "没有明确需要立即",
+    "没有必须立即",
+    "没有必须立刻",
+    "没有完整日志",
+    "没有业务内容",
+    "不形成可用判断",
+    "不能确认完整",
+    "不足以证明",
+    "没有直接讨论",
+    "不能仅凭摘要",
+    "不能从",
+    "不应从",
+    "可靠判断",
+    "可以忽略",
+    "只看到关键词命中",
+    "只显示“有文章匹配",
+    "只显示\"有文章匹配",
+    "没有具体标题",
+    "没有具体文章标题",
+    "没有标题、链接或正文",
+    "没有可读标题",
+    "没有露出具体文章标题",
+    "未看到发送环境",
+    "无法判断是否有实质",
+    "无法判断其中是否",
+    "不能确认是否有实质",
+    "不能据此判断",
+    "不能据此形成",
+    "不能提炼观点",
+    "不值得展开",
+)
+
+LOW_SIGNAL_BRIEF_REGEXES = (
+    re.compile(r"还包含一个.*"),
+    re.compile(r"还包含.*(?:链接|页面)[。；;]?$"),
+)
+
+
+def markdown_heading_level(block: str) -> int:
+    match = re.match(r"^(#{2,6})\s+\S", block.strip())
+    return len(match.group(1)) if match else 0
+
+
+def prune_low_signal_block(block: str) -> str:
+    block = re.sub(r"，但", "。但", block)
+    parts = re.findall(r".+?(?:[。！？；;]|$)", block, flags=re.DOTALL)
+    kept: list[str] = []
+    for part in parts:
+        text = re.sub(r"^\s*但", "", part.strip())
+        if not text:
+            continue
+        if any(pattern in text for pattern in LOW_SIGNAL_BRIEF_PATTERNS):
+            continue
+        if any(pattern.search(text) for pattern in LOW_SIGNAL_BRIEF_REGEXES):
+            continue
+        kept.append(text)
+    return "".join(kept).strip()
+
+
+def prune_empty_signal_sections(markdown: str) -> str:
+    blocks = [block.strip() for block in re.split(r"\n{2,}", markdown.strip()) if block.strip()]
+    if not blocks:
+        return markdown
+    kept: list[str] = []
+    for block in blocks:
+        if block.startswith("# ") or markdown_heading_level(block):
+            kept.append(block)
+            continue
+        cleaned = prune_low_signal_block(block)
+        if cleaned:
+            kept.append(cleaned)
+    pruned: list[str] = []
+    for index, block in enumerate(kept):
+        level = markdown_heading_level(block)
+        if level:
+            next_level = 0
+            for later in kept[index + 1 :]:
+                next_level = markdown_heading_level(later)
+                if next_level or later:
+                    break
+            if next_level and next_level <= level:
+                continue
+            if index == len(kept) - 1:
+                continue
+        pruned.append(block)
+    return "\n\n".join(pruned).rstrip() + "\n"
+
+
 def render_report(args: argparse.Namespace, scan: dict[str, Any]) -> str:
     summary_engine = getattr(args, "summary_engine", DEFAULT_SUMMARY_ENGINE)
     if summary_engine == "podsum":
@@ -1789,7 +2289,8 @@ def render_report(args: argparse.Namespace, scan: dict[str, Any]) -> str:
         pack = EmailEvidencePack.from_dict(scan)
         topic_map = scan.get("topic_map", {}) if isinstance(scan.get("topic_map"), dict) else {}
         return brief_agent.compose_with_need_store(pack, topic_map, empty_need_store(), "", {}, "dry-run: skipped Hermes summary").email_intel_brief.markdown
-    scan_json = json.dumps(llm_brief_input(scan), ensure_ascii=False, indent=2)
+    digest = preprocessed_evidence_digest(args, scan)
+    scan_json = json.dumps(digest, ensure_ascii=False, indent=2)
     prompt = args.email_summary_prompt.read_text(encoding="utf-8").format(
         date=scan["date"],
         generated_at=now_stamp(),
@@ -1803,6 +2304,7 @@ def render_report(args: argparse.Namespace, scan: dict[str, Any]) -> str:
     if not ok:
         return append_review_checklist(build_intel_brief_draft(scan, f"Hermes 摘要失败：{value}"), scan)
     rendered = value or build_intel_brief_draft(scan, "Hermes returned empty output")
+    rendered = prune_empty_signal_sections(rendered)
     return append_review_checklist(ensure_intel_brief_traceability(rendered, scan), scan)
 
 
@@ -1954,6 +2456,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--recent-days", type=int, default=DEFAULT_RECENT_DAYS)
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     parser.add_argument("--email-summary-prompt", type=Path, default=DEFAULT_PROMPT)
+    parser.add_argument("--email-evidence-preprocess-prompt", type=Path, default=DEFAULT_EVIDENCE_PREPROCESS_PROMPT)
     parser.add_argument("--email-link-policy", type=Path, default=DEFAULT_LINK_POLICY)
     parser.add_argument("--email-topic-file", type=Path, default=DEFAULT_TOPIC_FILE)
     parser.add_argument("--summary-engine", choices=("podsum", "hermes"), default=DEFAULT_SUMMARY_ENGINE)
@@ -1962,6 +2465,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--target", default=DEFAULT_TARGET)
     parser.add_argument("--hermes", type=Path, default=DEFAULT_HERMES)
     parser.add_argument("--hermes-timeout", type=int, default=180)
+    parser.add_argument("--no-llm-evidence-preprocess", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-send", action="store_true")
     parser.add_argument(
@@ -1975,6 +2479,7 @@ def normalize_args(args: argparse.Namespace) -> None:
     args.output = args.output.expanduser()
     args.env_file = args.env_file.expanduser()
     args.email_summary_prompt = args.email_summary_prompt.expanduser()
+    args.email_evidence_preprocess_prompt = args.email_evidence_preprocess_prompt.expanduser()
     args.email_link_policy = args.email_link_policy.expanduser()
     args.email_topic_file = args.email_topic_file.expanduser()
     args.project_dir = args.project_dir.expanduser()
