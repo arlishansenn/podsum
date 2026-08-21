@@ -16,6 +16,7 @@ from typing import Any, Optional
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EMAIL_SUMMARY_PROMPT = ROOT / "outputs" / "email_summary_prompt.md"
 PODSUM = ROOT / "outputs" / "podsum.py"
 sys.path.insert(0, str(ROOT / "outputs"))
 import podsum  # noqa: E402
@@ -108,6 +109,90 @@ def write_feed(path: Path, old_audio: Path, new_audio: Path) -> None:
         ).strip(),
         encoding="utf-8",
     )
+
+
+def email_summary_prompt_text() -> str:
+    return EMAIL_SUMMARY_PROMPT.read_text(encoding="utf-8")
+
+
+class EmailSummaryPromptTest(unittest.TestCase):
+    """email_summary_prompt.md 是 Hermes 的契约文本：改一句就改了 brief 的形状。
+
+    断言的是逐字短语而不是行为，所以改 prompt 时必须连着这里一起改；分散在 CLI
+    测试里的时候，改 prompt 的人找不到它们。
+    """
+
+    def test_email_summary_prompt_matches_deep_interpretation_style(self) -> None:
+        prompt = email_summary_prompt_text()
+
+        self.assertIn("邮件情报助理", prompt)
+        self.assertIn("不要复述字段名或数据结构", prompt)
+        self.assertIn("正文不要出现 JSON、字段", prompt)
+        self.assertIn("只写有实质证据的发现", prompt)
+        self.assertIn("整段省略", prompt)
+        self.assertIn("直接省略", prompt)
+        self.assertIn("连小节标题一起省略", prompt)
+        self.assertNotIn("可以忽略什么", prompt)
+        self.assertIn("必须把来源嵌在正文对应内容里", prompt)
+        self.assertIn("[UID 1001](email://2026-07-05/1001)", prompt)
+        self.assertNotIn("## 来源索引", prompt)
+        self.assertIn("# Morning Brief - {date}", prompt)
+        self.assertIn("## 今天先看", prompt)
+        self.assertIn("## 需要处理", prompt)
+        self.assertIn("## 情报线索", prompt)
+        self.assertIn("## 证据边界", prompt)
+        self.assertNotIn("对象: EmailIntelBrief", prompt)
+        self.assertNotIn("来源对象: EmailEvidencePack", prompt)
+        self.assertNotIn("处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief", prompt)
+        self.assertIn("合并重复、营销、低信号邮件", prompt)
+        self.assertIn("digest 类邮件例外", prompt)
+        self.assertIn("跟踪话题提示", prompt)
+        self.assertNotIn("EmailEvidencePack", prompt)
+        self.assertIn("邮件片段不是完整正文", prompt)
+        self.assertIn("已抓取公开网页证据优先", prompt)
+        self.assertIn("证据边界可以自然写成", prompt)
+        self.assertIn("不要把来源集中放到末尾", prompt)
+        self.assertIn("触达上限，可能有遗漏", prompt)
+
+    def test_email_summary_prompt_requires_digest_items_to_be_expanded(self) -> None:
+        """digest 类邮件本身没有内容，它的内容就是那张链接列表——压成一行等于丢掉全部信息。"""
+        prompt = email_summary_prompt_text()
+
+        # 三类必须点名，否则模型只会认字面上的 "digest"
+        for email_type in ("google_alert", "digest", "newsletter_article"):
+            with self.subTest(email_type=email_type):
+                self.assertIn(email_type, prompt)
+
+        self.assertIn("逐条展开", prompt)
+        self.assertIn("不允许压成一行", prompt)
+        self.assertIn("每个子条目一行", prompt)
+        self.assertIn("normalized_url", prompt)
+        self.assertIn("不超过一行", prompt)
+
+    def test_email_summary_prompt_names_the_real_digest_email_types(self) -> None:
+        """prompt 的 digest 规则靠类型名点名：策略里改了名字而 prompt 不动，规则会静默失效。"""
+        prompt = email_summary_prompt_text()
+        policy_types = {entry["name"] for entry in email_summary.DEFAULT_POLICY["email_types"]}
+
+        for email_type in email_summary.DIGEST_EMAIL_TYPES:
+            with self.subTest(email_type=email_type):
+                self.assertIn(email_type, policy_types, "digest 家族必须是真实存在的策略类型")
+                self.assertIn(email_type, prompt, "prompt 不点名这个类型，这类邮件仍会被压成一行")
+
+    def test_email_summary_prompt_merges_same_subject_digests_by_url(self) -> None:
+        """按 subject 判重会整封丢弃：8/19 的 RWA 快讯就是这样整个消失的。"""
+        prompt = email_summary_prompt_text()
+
+        self.assertIn("按链接地址去重", prompt)
+        self.assertIn("不要按邮件主题判重", prompt)
+        self.assertIn("整封丢弃", prompt)
+
+    def test_email_summary_prompt_keeps_unenriched_links_clickable(self) -> None:
+        """pending 的链接仍是有效点击目标：指向来源本身就是它的用途，不是未验证论断。"""
+        prompt = email_summary_prompt_text()
+
+        self.assertIn("尚未抓取正文的链接", prompt)
+        self.assertIn("不构成未验证论断", prompt)
 
 
 class PodsumCliTest(unittest.TestCase):
@@ -355,38 +440,6 @@ class PodsumCliTest(unittest.TestCase):
         self.assertIn("--root", result.stdout)
         self.assertIn("--policy-file", result.stdout)
         self.assertIn("--topic-file", result.stdout)
-
-    def test_email_summary_prompt_matches_deep_interpretation_style(self) -> None:
-        prompt = (ROOT / "outputs" / "email_summary_prompt.md").read_text(encoding="utf-8")
-
-        self.assertIn("邮件情报助理", prompt)
-        self.assertIn("不要复述字段名或数据结构", prompt)
-        self.assertIn("正文不要出现 JSON、字段", prompt)
-        self.assertIn("只写有实质证据的发现", prompt)
-        self.assertIn("整段省略", prompt)
-        self.assertIn("直接省略", prompt)
-        self.assertIn("连小节标题一起省略", prompt)
-        self.assertNotIn("可以忽略什么", prompt)
-        self.assertIn("必须把来源嵌在正文对应内容里", prompt)
-        self.assertIn("[UID 1001](email://2026-07-05/1001)", prompt)
-        self.assertNotIn("## 来源索引", prompt)
-        self.assertIn("# Morning Brief - {date}", prompt)
-        self.assertIn("## 今天先看", prompt)
-        self.assertIn("## 需要处理", prompt)
-        self.assertIn("## 情报线索", prompt)
-        self.assertIn("## 证据边界", prompt)
-        self.assertNotIn("对象: EmailIntelBrief", prompt)
-        self.assertNotIn("来源对象: EmailEvidencePack", prompt)
-        self.assertNotIn("处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief", prompt)
-        self.assertIn("合并重复、营销、低信号邮件", prompt)
-        self.assertIn("digest 类邮件例外", prompt)
-        self.assertIn("跟踪话题提示", prompt)
-        self.assertNotIn("EmailEvidencePack", prompt)
-        self.assertIn("邮件片段不是完整正文", prompt)
-        self.assertIn("已抓取公开网页证据优先", prompt)
-        self.assertIn("证据边界可以自然写成", prompt)
-        self.assertIn("不要把来源集中放到末尾", prompt)
-        self.assertIn("触达上限，可能有遗漏", prompt)
 
     def test_email_intel_brief_prunes_empty_signal_sections(self) -> None:
         markdown = textwrap.dedent(
@@ -2894,7 +2947,7 @@ class PodsumCliTest(unittest.TestCase):
         args = argparse.Namespace(
             summary_engine="hermes",
             dry_run=False,
-            email_summary_prompt=ROOT / "outputs" / "email_summary_prompt.md",
+            email_summary_prompt=EMAIL_SUMMARY_PROMPT,
             email_evidence_preprocess_prompt=ROOT / "outputs" / "email_evidence_preprocess_prompt.md",
             hermes=Path("/bin/echo"),
             project_dir=ROOT,
@@ -4137,36 +4190,6 @@ class PodsumCliTest(unittest.TestCase):
         ]
         payload = email_summary.scan_payload("", 1, 20, len(items), list(items))
         self.assertEqual([item["uid"] for item in payload["items"]], ["1"])
-
-    def test_email_summary_prompt_requires_digest_items_to_be_expanded(self) -> None:
-        """digest 类邮件本身没有内容，它的内容就是那张链接列表——压成一行等于丢掉全部信息。"""
-        prompt = (ROOT / "outputs" / "email_summary_prompt.md").read_text(encoding="utf-8")
-
-        # 三类必须点名，否则模型只会认字面上的 "digest"
-        for email_type in ("google_alert", "digest", "newsletter_article"):
-            with self.subTest(email_type=email_type):
-                self.assertIn(email_type, prompt)
-
-        self.assertIn("逐条展开", prompt)
-        self.assertIn("不允许压成一行", prompt)
-        self.assertIn("每个子条目一行", prompt)
-        self.assertIn("normalized_url", prompt)
-        self.assertIn("不超过一行", prompt)
-
-    def test_email_summary_prompt_merges_same_subject_digests_by_url(self) -> None:
-        """按 subject 判重会整封丢弃：8/19 的 RWA 快讯就是这样整个消失的。"""
-        prompt = (ROOT / "outputs" / "email_summary_prompt.md").read_text(encoding="utf-8")
-
-        self.assertIn("按链接地址去重", prompt)
-        self.assertIn("不要按邮件主题判重", prompt)
-        self.assertIn("整封丢弃", prompt)
-
-    def test_email_summary_prompt_keeps_unenriched_links_clickable(self) -> None:
-        """pending 的链接仍是有效点击目标：指向来源本身就是它的用途，不是未验证论断。"""
-        prompt = (ROOT / "outputs" / "email_summary_prompt.md").read_text(encoding="utf-8")
-
-        self.assertIn("尚未抓取正文的链接", prompt)
-        self.assertIn("不构成未验证论断", prompt)
 
 
 if __name__ == "__main__":

@@ -170,6 +170,10 @@ DEFAULT_POLICY: dict[str, Any] = {
     ],
 }
 
+# 自己没有内容、内容就是那张链接列表的三类。prompt 里的「逐条展开」规则按类型名点名，
+# 改了这里就必须改 prompt，否则那条规则会静默失效。
+DIGEST_EMAIL_TYPES = ("google_alert", "newsletter_article", "digest")
+
 DEFAULT_TOPIC_MAP: dict[str, Any] = {
     "object_type": "email_topic_map",
     "version": 1,
@@ -2091,7 +2095,7 @@ def classify_brief_items(scan: dict[str, Any]) -> tuple[list[dict[str, Any]], li
         has_links = bool(item.get("links"))
         if email_type in {"personal", "transactional"} or item.get("has_attachments"):
             need_action.append(item)
-        elif item.get("topics") or email_type in {"google_alert", "newsletter_article", "digest"} or fetched_public_link_evidence(item) or has_links:
+        elif item.get("topics") or email_type in DIGEST_EMAIL_TYPES or fetched_public_link_evidence(item) or has_links:
             worth_knowing.append(item)
         elif "metadata_only" in risks:
             ignore.append(item)
