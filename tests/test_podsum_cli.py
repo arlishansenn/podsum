@@ -3925,6 +3925,107 @@ class PodsumCliTest(unittest.TestCase):
             self.assertEqual(paths["email_env"], str(home / ".env"))
             self.assertEqual(paths["sender_state"], str(home / "feishu_sent.json"))
 
+    @staticmethod
+    def _smtp_args(env_file: Path, **overrides: Any) -> argparse.Namespace:
+        base = dict(
+            env_file=env_file,
+            imap_host="", imap_user="", imap_pass="",
+            smtp_host="", smtp_port=0, smtp_user="", smtp_pass="",
+            smtp_from="", smtp_to="", smtp_starttls=False,
+            smtp_no_ssl=False, smtp_no_tls_verify=False, smtp_timeout=0,
+        )
+        base.update(overrides)
+        return argparse.Namespace(**base)
+
+    def test_split_recipients_accepts_comma_semicolon_and_whitespace(self) -> None:
+        self.assertEqual(email_summary.split_recipients("a@x.com, b@x.com"), ["a@x.com", "b@x.com"])
+        self.assertEqual(email_summary.split_recipients("a@x.com;b@x.com"), ["a@x.com", "b@x.com"])
+        self.assertEqual(email_summary.split_recipients("a@x.com b@x.com"), ["a@x.com", "b@x.com"])
+        self.assertEqual(email_summary.split_recipients(" a@x.com ,; b@x.com\n"), ["a@x.com", "b@x.com"])
+        self.assertEqual(email_summary.split_recipients(""), [])
+
+    def test_infer_smtp_host_falls_back_through_imap_host_then_user_domain(self) -> None:
+        self.assertEqual(email_summary.infer_smtp_host("imap.example.com"), "smtp.example.com")
+        self.assertEqual(email_summary.infer_smtp_host("mail-imap.example.com"), "mail-smtp.example.com")
+        self.assertEqual(email_summary.infer_smtp_host("", "me@example.com"), "smtp.example.com")
+        self.assertEqual(email_summary.infer_smtp_host("", "no-at-sign"), "")
+
+    def test_smtp_config_prefers_cli_then_env_then_env_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text(
+                "PODSUM_EMAIL_SMTP_HOST=smtp.from-file\nPODSUM_EMAIL_SMTP_TO=file@x.com\n",
+                encoding="utf-8",
+            )
+
+            config = email_summary.smtp_config(self._smtp_args(env_file))
+            self.assertEqual(config["host"], "smtp.from-file")
+            self.assertEqual(config["recipients"], ["file@x.com"])
+
+            real = os.environ.get("PODSUM_EMAIL_SMTP_HOST")
+            os.environ["PODSUM_EMAIL_SMTP_HOST"] = "smtp.from-env"
+            try:
+                self.assertEqual(email_summary.smtp_config(self._smtp_args(env_file))["host"], "smtp.from-env")
+                self.assertEqual(
+                    email_summary.smtp_config(self._smtp_args(env_file, smtp_host="smtp.from-cli"))["host"],
+                    "smtp.from-cli",
+                )
+            finally:
+                if real is None:
+                    del os.environ["PODSUM_EMAIL_SMTP_HOST"]
+                else:
+                    os.environ["PODSUM_EMAIL_SMTP_HOST"] = real
+
+    def test_send_report_with_email_delivery_uses_smtp_and_never_hermes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env_file = tmp_path / ".env"
+            env_file.write_text("PODSUM_EMAIL_SMTP_TO=to@x.com\n", encoding="utf-8")
+            report = tmp_path / "brief.md"
+            report.write_text("# Brief\n\n要点一。\n", encoding="utf-8")
+            args = self._smtp_args(
+                env_file,
+                delivery="email",
+                dry_run=False,
+                smtp_host="smtp.example.com",
+                smtp_from="from@x.com",
+            )
+            scan = {"date": "2026-08-21", "account": "me@x.com", "window": "1d", "raw_count": 3}
+            sent = {}
+
+            def fake_smtp(**kwargs: Any) -> str:
+                sent.update(kwargs)
+                return "sent email to 1 recipient(s)"
+
+            def exploding_hermes(*_args: Any, **_kwargs: Any) -> str:
+                raise AssertionError("delivery=email 不该走 Hermes")
+
+            real = (
+                email_summary.send_smtp_email,
+                email_summary.send_hermes_file,
+                email_summary.review_checklist,
+                email_summary.log,
+            )
+            email_summary.send_smtp_email = fake_smtp
+            email_summary.send_hermes_file = exploding_hermes
+            email_summary.review_checklist = lambda *_: {"ready_to_send": True, "risks": []}
+            email_summary.log = lambda message: None
+            try:
+                result = email_summary.send_report(args, report, scan)
+            finally:
+                (
+                    email_summary.send_smtp_email,
+                    email_summary.send_hermes_file,
+                    email_summary.review_checklist,
+                    email_summary.log,
+                ) = real
+
+            self.assertIsNone(result, "email 投递不产出 EPUB")
+            self.assertEqual(sent["recipients"], ["to@x.com"])
+            self.assertEqual(sent["host"], "smtp.example.com")
+            self.assertIn("2026-08-21", sent["subject"])
+            self.assertIn("<html>", sent["html_body"])
+
 
 if __name__ == "__main__":
     unittest.main()
