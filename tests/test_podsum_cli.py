@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import shlex
+import re
 import subprocess
 import sys
 import textwrap
@@ -16,6 +17,8 @@ from typing import Any, Optional
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EMAIL_SUMMARY_PROMPT = ROOT / "outputs" / "email_summary_prompt.md"
+OUTPUTS_README = ROOT / "outputs" / "README.md"
 PODSUM = ROOT / "outputs" / "podsum.py"
 sys.path.insert(0, str(ROOT / "outputs"))
 import podsum  # noqa: E402
@@ -108,6 +111,90 @@ def write_feed(path: Path, old_audio: Path, new_audio: Path) -> None:
         ).strip(),
         encoding="utf-8",
     )
+
+
+def email_summary_prompt_text() -> str:
+    return EMAIL_SUMMARY_PROMPT.read_text(encoding="utf-8")
+
+
+class EmailSummaryPromptTest(unittest.TestCase):
+    """email_summary_prompt.md 是 Hermes 的契约文本：改一句就改了 brief 的形状。
+
+    断言的是逐字短语而不是行为，所以改 prompt 时必须连着这里一起改；分散在 CLI
+    测试里的时候，改 prompt 的人找不到它们。
+    """
+
+    def test_email_summary_prompt_matches_deep_interpretation_style(self) -> None:
+        prompt = email_summary_prompt_text()
+
+        self.assertIn("邮件情报助理", prompt)
+        self.assertIn("不要复述字段名或数据结构", prompt)
+        self.assertIn("正文不要出现 JSON、字段", prompt)
+        self.assertIn("只写有实质证据的发现", prompt)
+        self.assertIn("整段省略", prompt)
+        self.assertIn("直接省略", prompt)
+        self.assertIn("连小节标题一起省略", prompt)
+        self.assertNotIn("可以忽略什么", prompt)
+        self.assertIn("必须把来源嵌在正文对应内容里", prompt)
+        self.assertIn("[UID 1001](email://2026-07-05/1001)", prompt)
+        self.assertNotIn("## 来源索引", prompt)
+        self.assertIn("# Morning Brief - {date}", prompt)
+        self.assertIn("## 今天先看", prompt)
+        self.assertIn("## 需要处理", prompt)
+        self.assertIn("## 情报线索", prompt)
+        self.assertIn("## 证据边界", prompt)
+        self.assertNotIn("对象: EmailIntelBrief", prompt)
+        self.assertNotIn("来源对象: EmailEvidencePack", prompt)
+        self.assertNotIn("处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief", prompt)
+        self.assertIn("合并重复、营销、低信号邮件", prompt)
+        self.assertIn("digest 类邮件例外", prompt)
+        self.assertIn("跟踪话题提示", prompt)
+        self.assertNotIn("EmailEvidencePack", prompt)
+        self.assertIn("邮件片段不是完整正文", prompt)
+        self.assertIn("已抓取公开网页证据优先", prompt)
+        self.assertIn("证据边界可以自然写成", prompt)
+        self.assertIn("不要把来源集中放到末尾", prompt)
+        self.assertIn("触达上限，可能有遗漏", prompt)
+
+    def test_email_summary_prompt_requires_digest_items_to_be_expanded(self) -> None:
+        """digest 类邮件本身没有内容，它的内容就是那张链接列表——压成一行等于丢掉全部信息。"""
+        prompt = email_summary_prompt_text()
+
+        # 三类必须点名，否则模型只会认字面上的 "digest"
+        for email_type in ("google_alert", "digest", "newsletter_article"):
+            with self.subTest(email_type=email_type):
+                self.assertIn(email_type, prompt)
+
+        self.assertIn("逐条展开", prompt)
+        self.assertIn("不允许压成一行", prompt)
+        self.assertIn("每个子条目一行", prompt)
+        self.assertIn("normalized_url", prompt)
+        self.assertIn("不超过一行", prompt)
+
+    def test_email_summary_prompt_names_the_real_digest_email_types(self) -> None:
+        """prompt 的 digest 规则靠类型名点名：策略里改了名字而 prompt 不动，规则会静默失效。"""
+        prompt = email_summary_prompt_text()
+        policy_types = {entry["name"] for entry in email_summary.DEFAULT_POLICY["email_types"]}
+
+        for email_type in email_summary.DIGEST_EMAIL_TYPES:
+            with self.subTest(email_type=email_type):
+                self.assertIn(email_type, policy_types, "digest 家族必须是真实存在的策略类型")
+                self.assertIn(email_type, prompt, "prompt 不点名这个类型，这类邮件仍会被压成一行")
+
+    def test_email_summary_prompt_merges_same_subject_digests_by_url(self) -> None:
+        """按 subject 判重会整封丢弃：8/19 的 RWA 快讯就是这样整个消失的。"""
+        prompt = email_summary_prompt_text()
+
+        self.assertIn("按链接地址去重", prompt)
+        self.assertIn("不要按邮件主题判重", prompt)
+        self.assertIn("整封丢弃", prompt)
+
+    def test_email_summary_prompt_keeps_unenriched_links_clickable(self) -> None:
+        """pending 的链接仍是有效点击目标：指向来源本身就是它的用途，不是未验证论断。"""
+        prompt = email_summary_prompt_text()
+
+        self.assertIn("尚未抓取正文的链接", prompt)
+        self.assertIn("不构成未验证论断", prompt)
 
 
 class PodsumCliTest(unittest.TestCase):
@@ -355,37 +442,6 @@ class PodsumCliTest(unittest.TestCase):
         self.assertIn("--root", result.stdout)
         self.assertIn("--policy-file", result.stdout)
         self.assertIn("--topic-file", result.stdout)
-
-    def test_email_summary_prompt_matches_deep_interpretation_style(self) -> None:
-        prompt = (ROOT / "outputs" / "email_summary_prompt.md").read_text(encoding="utf-8")
-
-        self.assertIn("邮件情报助理", prompt)
-        self.assertIn("不要复述字段名或数据结构", prompt)
-        self.assertIn("正文不要出现 JSON、字段", prompt)
-        self.assertIn("只写有实质证据的发现", prompt)
-        self.assertIn("整段省略", prompt)
-        self.assertIn("直接省略", prompt)
-        self.assertIn("连小节标题一起省略", prompt)
-        self.assertNotIn("可以忽略什么", prompt)
-        self.assertIn("必须把来源嵌在正文对应内容里", prompt)
-        self.assertIn("[UID 1001](email://2026-07-05/1001)", prompt)
-        self.assertNotIn("## 来源索引", prompt)
-        self.assertIn("# Morning Brief - {date}", prompt)
-        self.assertIn("## 今天先看", prompt)
-        self.assertIn("## 需要处理", prompt)
-        self.assertIn("## 情报线索", prompt)
-        self.assertIn("## 证据边界", prompt)
-        self.assertNotIn("对象: EmailIntelBrief", prompt)
-        self.assertNotIn("来源对象: EmailEvidencePack", prompt)
-        self.assertNotIn("处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief", prompt)
-        self.assertIn("合并重复、营销、低信号邮件", prompt)
-        self.assertIn("跟踪话题提示", prompt)
-        self.assertNotIn("EmailEvidencePack", prompt)
-        self.assertIn("邮件片段不是完整正文", prompt)
-        self.assertIn("已抓取公开网页证据优先", prompt)
-        self.assertIn("证据边界可以自然写成", prompt)
-        self.assertIn("不要把来源集中放到末尾", prompt)
-        self.assertIn("触达上限，可能有遗漏", prompt)
 
     def test_email_intel_brief_prunes_empty_signal_sections(self) -> None:
         markdown = textwrap.dedent(
@@ -2028,8 +2084,11 @@ class PodsumCliTest(unittest.TestCase):
         self.assertIn("触达上限，可能有遗漏", markdown)
         self.assertIn("仅基于邮件摘要", markdown)
         self.assertIn("[UID personal-1](email://2026-07-05/personal-1)", markdown)
-        self.assertEqual([source["source_uid"] for source in sources], ["personal-1"])
+        # alert-1 是 google_alert：以前被整体排除、整封消失，现在进订阅摘要区并保留溯源。
+        self.assertEqual([source["source_uid"] for source in sources], ["personal-1", "alert-1"])
         self.assertEqual(sources[0]["subject"], "Fixture Follow-up")
+        self.assertIn("## 订阅摘要", markdown)
+        self.assertIn("](https://example.invalid/source)", markdown)
         self.assertTrue(checklist["ready_to_send"])
 
     def test_run_once_downloads_only_latest_episode_per_feed(self) -> None:
@@ -2893,7 +2952,7 @@ class PodsumCliTest(unittest.TestCase):
         args = argparse.Namespace(
             summary_engine="hermes",
             dry_run=False,
-            email_summary_prompt=ROOT / "outputs" / "email_summary_prompt.md",
+            email_summary_prompt=EMAIL_SUMMARY_PROMPT,
             email_evidence_preprocess_prompt=ROOT / "outputs" / "email_evidence_preprocess_prompt.md",
             hermes=Path("/bin/echo"),
             project_dir=ROOT,
@@ -3207,6 +3266,10 @@ class PodsumCliTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             send_args = hermes_args.read_text(encoding="utf-8")
             self.assertIn("[Podsum] 2026-07-05 Email Summary", send_args)
+            self.assertTrue(
+                any(email_summary.is_self_mail({"subject": line}, "") for line in send_args.splitlines()),
+                "发出去的主题必须被扫描端的自发邮件判据认出来，否则 brief 会把自己读回来",
+            )
             self.assertIn("Podsum Email Summary 2026-07-05", send_args)
             self.assertNotIn("文字稿", send_args)
 
@@ -4033,6 +4096,10 @@ class PodsumCliTest(unittest.TestCase):
             self.assertEqual(sent["recipients"], ["to@x.com"])
             self.assertEqual(sent["host"], "smtp.example.com")
             self.assertIn("2026-08-21", sent["subject"])
+            self.assertTrue(
+                email_summary.is_self_mail({"subject": sent["subject"]}, ""),
+                "投递目标就是被扫描的邮箱，主题必须被扫描端认成自发邮件，否则 brief 会把自己读回来",
+            )
             self.assertIn("<html>", sent["html_body"])
 
     def test_delivery_cli_defaults_are_empty_on_every_entrypoint(self) -> None:
@@ -4128,6 +4195,336 @@ class PodsumCliTest(unittest.TestCase):
         ]
         payload = email_summary.scan_payload("", 1, 20, len(items), list(items))
         self.assertEqual([item["uid"] for item in payload["items"]], ["1"])
+
+
+class DigestRenderingTest(unittest.TestCase):
+    """digest 类邮件自己没有内容，内容就是那张链接列表。压成一行等于全部丢掉。"""
+
+    @staticmethod
+    def _alert(
+        uid: str,
+        date: str,
+        links: list[tuple[str, str, str]],
+        subject: str = "Google快讯 - RWA",
+    ) -> dict[str, object]:
+        return {
+            "uid": uid,
+            "date": date,
+            "from": "Google Alerts <googlealerts-noreply@google.com>",
+            "subject": subject,
+            "snippet": "RWA 相关的新报道",
+            "email_type": "google_alert",
+            "has_attachments": False,
+            "links": [
+                {
+                    "anchor_text": anchor_text,
+                    "context": context,
+                    "url": url,
+                    "normalized_url": url,
+                    "policy_decision": "pending",
+                }
+                for anchor_text, url, context in links
+            ],
+            "evidence": [],
+            "risks": [],
+            "flags": [],
+            "topics": [],
+        }
+
+    @staticmethod
+    def _render_scan(*items: dict[str, object]) -> str:
+        return email_summary.build_intel_brief_draft(
+            {
+                "date": "2026-08-21",
+                "account": "fixture@example.invalid",
+                "window": "2d",
+                "scan_limit": 20,
+                "raw_count": len(items),
+                "possibly_truncated": False,
+                "items": list(items),
+            }
+        )
+
+    def _render(self) -> str:
+        shared = ("RWA 在 DeFi 活跃资金逼近 40 亿美元", "https://example.invalid/rwa-defi", "据 DefiLlama 数据，规模升至约 39.8 亿美元。")
+        return self._render_scan(
+            self._alert("1329", "Wed, 19 Aug 2026 08:00:00 +0800", [
+                shared,
+                ("OneLife 链上全球购落地", "https://example.invalid/onelife", "RWA 从金融资产代币化迈向实体经济。"),
+            ]),
+            self._alert("1335", "Thu, 20 Aug 2026 08:00:00 +0800", [
+                shared,
+                ("X Layer 推 RWA 流动性激励", "https://example.invalid/xlayer", "总激励规模达 500 万美元。"),
+            ]),
+        )
+
+    def test_same_subject_digests_merge_into_one_deduped_list(self) -> None:
+        markdown = self._render()
+
+        # 三个唯一 URL 全在，共享的那个只出现一次——按 subject 判重会整封丢掉一整批条目
+        for url in ("https://example.invalid/rwa-defi", "https://example.invalid/onelife", "https://example.invalid/xlayer"):
+            with self.subTest(url=url):
+                self.assertEqual(markdown.count(f"]({url})"), 1, markdown)
+
+    def test_each_link_is_one_line_with_anchor_and_context(self) -> None:
+        markdown = self._render()
+
+        line = next((l for l in markdown.splitlines() if "https://example.invalid/xlayer" in l), "")
+        self.assertTrue(line.startswith("- "), markdown)
+        self.assertIn("[X Layer 推 RWA 流动性激励](https://example.invalid/xlayer)", line)
+        self.assertIn("总激励规模达 500 万美元", line)
+
+    def test_digest_gets_its_own_section_instead_of_competing_for_top_five(self) -> None:
+        markdown = self._render()
+
+        self.assertIn("Google快讯 - RWA", markdown)
+        top = markdown.split("## ")[1] if "## " in markdown else markdown
+        self.assertNotIn("example.invalid", top, "digest 链接不该挤进今天先看")
+
+    def test_merged_digest_keeps_every_contributing_email_traceable(self) -> None:
+        """合并去重之后仍要追得回是哪几封邮件带来的，否则 digest 区没有溯源。"""
+        markdown = self._render()
+
+        self.assertIn("[UID 1329](email://2026-08-21/1329)", markdown)
+        self.assertIn("[UID 1335](email://2026-08-21/1335)", markdown)
+
+    def test_pending_links_are_still_rendered_as_click_targets(self) -> None:
+        markdown = self._render()
+
+        # policy_decision 全是 pending：指向来源本身就是它的用途，不是未验证论断
+        self.assertIn("](https://example.invalid/rwa-defi)", markdown)
+
+    def test_different_subjects_stay_in_separate_lists(self) -> None:
+        """不同快讯倒进同一张列表，读者就分不清哪条来自哪份订阅。"""
+        markdown = self._render_scan(
+            self._alert("1400", "Thu, 20 Aug 2026 08:00:00 +0800", [
+                ("RWA 条目", "https://example.invalid/rwa", "一"),
+            ]),
+            self._alert("1401", "Thu, 20 Aug 2026 09:00:00 +0800", [
+                ("稳定币条目", "https://example.invalid/stable", "二"),
+            ], subject="Google快讯 - 稳定币"),
+        )
+
+        section = markdown.split("## 订阅摘要")[1]
+        self.assertIn("### Google快讯 - RWA", section)
+        self.assertIn("### Google快讯 - 稳定币", section)
+
+    def test_bare_links_render_without_empty_titles_or_dangling_dashes(self) -> None:
+        """anchor_text 缺失时标题退回 url；没有 context 时不留一条空破折号尾巴。"""
+        markdown = self._render_scan(
+            self._alert("1402", "Thu, 20 Aug 2026 08:00:00 +0800", [
+                ("", "https://example.invalid/bare", ""),
+            ]),
+        )
+
+        section = markdown.split("## 订阅摘要")[1]
+        self.assertIn("- [https://example.invalid/bare](https://example.invalid/bare)", section)
+        self.assertNotIn("—", section)
+
+    def test_malformed_links_are_skipped_instead_of_rendered(self) -> None:
+        """扫描产物不保证每个 link 都是带地址的 dict，渲染不能因此崩掉或输出空链接。"""
+        item = self._alert("1403", "Thu, 20 Aug 2026 08:00:00 +0800", [
+            ("有效条目", "https://example.invalid/ok", "正常"),
+        ])
+        item["links"] = ["not-a-dict", {"anchor_text": "空地址", "normalized_url": "   "}] + list(item["links"])
+
+        section = self._render_scan(item).split("## 订阅摘要")[1]
+        self.assertIn("](https://example.invalid/ok)", section)
+        self.assertNotIn("空地址", section)
+
+
+class LlmBriefTest(unittest.TestCase):
+    """podsum 引擎的 brief 必须由 LLM 写；模板是失败时的兜底，不是常态。"""
+
+    SCAN = {
+        "object_type": "email_evidence_pack",
+        "object_version": "1",
+        "status": "ready_for_summary",
+        "date": "2026-08-21",
+        "account": "fixture@example.invalid",
+        "window": "1d",
+        "scan_limit": 10,
+        "raw_count": 1,
+        "possibly_truncated": False,
+        "items": [
+            {
+                "uid": "77",
+                "date": "Fri, 21 Aug 2026 08:00:00 +0800",
+                "from": "Someone <someone@example.invalid>",
+                "subject": "Fixture Follow-up",
+                "snippet": "需要回复的邮件",
+                "email_type": "personal",
+                "links": [],
+                "evidence": [],
+                "risks": [],
+                "flags": [],
+            }
+        ],
+    }
+
+    def _writer(self, outcome):
+        calls = []
+
+        def fake_hermes(_binary, prompt, cwd=None, timeout=None):
+            calls.append(prompt)
+            return outcome
+
+        return fake_hermes, calls
+
+    def _render(self, outcome, reason=""):
+        fake, calls = self._writer(outcome)
+        real = email_summary.run_hermes_prompt
+        email_summary.run_hermes_prompt = fake
+        try:
+            markdown = email_summary.llm_brief_markdown(
+                self.SCAN,
+                hermes="/nonexistent/hermes",
+                prompt_path=EMAIL_SUMMARY_PROMPT,
+                project_dir=ROOT,
+                timeout=5,
+                reason=reason,
+            )
+        finally:
+            email_summary.run_hermes_prompt = real
+        return markdown, calls
+
+    def _compose(self, writer):
+        pack = EmailEvidencePack.from_dict(self.SCAN)
+        return brief_agent.compose_with_need_store(
+            pack, {}, email_summary.empty_need_store(), "", {}, "dry-run: skipped", writer
+        ).email_intel_brief.markdown
+
+    def test_no_writer_means_deterministic_template(self) -> None:
+        """writer 为空就是 dry-run 那条路：不调 LLM，输出确定。"""
+        markdown = self._compose(None)
+
+        self.assertIn("Fixture Follow-up", markdown)
+        self.assertNotIn("dry-run", markdown, "内部处理用语不进正文")
+
+    def test_writer_is_what_produces_the_brief_when_present(self) -> None:
+        """装了 writer 就必须由它写，模板退到兜底位置。"""
+        seen = []
+
+        def writer(scan_dict, reason):
+            seen.append(reason)
+            return "# Morning Brief - 2026-08-21\n\n只有 LLM 会这么写。\n"
+
+        markdown = self._compose(writer)
+
+        self.assertEqual(seen, ["dry-run: skipped"])
+        self.assertIn("只有 LLM 会这么写", markdown)
+        self.assertNotIn("Fixture Follow-up", markdown, "不该再走模板")
+
+    def test_llm_output_becomes_the_brief(self) -> None:
+        markdown, calls = self._render((True, "# Morning Brief - 2026-08-21\n\n## 今天先看\n\n- LLM 写的判断。[UID 77](email://2026-08-21/77)\n"))
+
+        self.assertEqual(len(calls), 1, "必须真的调用 LLM")
+        self.assertIn("LLM 写的判断", markdown)
+        self.assertIn("Fixture Follow-up", calls[0], "EvidencePack JSON 要进 prompt")
+        self.assertIn("逐条展开", calls[0], "prompt 文件里的规则要进去")
+
+    def test_llm_failure_falls_back_to_template_and_says_so(self) -> None:
+        markdown, calls = self._render((False, "hermes exited 1"))
+
+        self.assertEqual(len(calls), 1)
+        self.assertIn("# Morning Brief - 2026-08-21", markdown)
+        self.assertIn("Fixture Follow-up", markdown, "回落到确定性模板")
+        self.assertIn("降级", markdown, "降级必须写进 brief，否则没人知道今天这份是模板")
+
+    def test_empty_llm_output_also_falls_back(self) -> None:
+        markdown, _ = self._render((True, "   "))
+
+        self.assertIn("Fixture Follow-up", markdown)
+        self.assertIn("降级", markdown)
+
+    @staticmethod
+    def _args(dry_run: bool) -> argparse.Namespace:
+        return argparse.Namespace(
+            dry_run=dry_run,
+            hermes=Path("/nonexistent/hermes"),
+            email_summary_prompt=EMAIL_SUMMARY_PROMPT,
+            project_dir=ROOT,
+            hermes_timeout=5,
+        )
+
+    def test_dry_run_gets_no_writer_so_it_never_reaches_the_llm(self) -> None:
+        """dry-run 一旦拿到 writer 就会真去调 Hermes，输出也不再确定。"""
+        self.assertIsNone(email_summary.make_brief_writer(self._args(dry_run=True)))
+
+    def test_real_run_gets_a_writer_that_routes_to_the_llm(self) -> None:
+        writer = email_summary.make_brief_writer(self._args(dry_run=False))
+        seen: dict[str, object] = {}
+        real = email_summary.llm_brief_markdown
+
+        def fake(scan, **kwargs):
+            seen.update(kwargs)
+            return "写好了"
+
+        email_summary.llm_brief_markdown = fake
+        try:
+            self.assertEqual(writer(self.SCAN, "内部原因"), "写好了")
+        finally:
+            email_summary.llm_brief_markdown = real
+
+        self.assertEqual(seen["prompt_path"], EMAIL_SUMMARY_PROMPT)
+        self.assertEqual(seen["reason"], "内部原因", "内部原因要一路带到兜底模板")
+
+    def test_notice_is_user_facing_while_reason_stays_internal(self) -> None:
+        """降级要让用户看见，但内部处理用语不能进正文——既有契约禁止暴露处理流程。"""
+        internal = email_summary.build_intel_brief_draft(self.SCAN, "dry-run: skipped Hermes summary")
+        self.assertNotIn("dry-run", internal)
+
+        surfaced = email_summary.build_intel_brief_draft(self.SCAN, "dry-run: skipped", notice="降级：本篇由确定性模板产出。")
+        self.assertIn("降级：本篇由确定性模板产出。", surfaced)
+        self.assertNotIn("dry-run", surfaced)
+
+
+class EditableFilesDocTest(unittest.TestCase):
+    """文档写死的链接上限必须跟代码一致，否则读者按文档调完发现没生效。"""
+
+    HEADING = "## Editable Email Summary Files"
+
+    def _section(self) -> str:
+        readme = OUTPUTS_README.read_text(encoding="utf-8")
+        self.assertIn(self.HEADING, readme)
+        return readme.split(self.HEADING, 1)[1].split("\n## ", 1)[0]
+
+    @staticmethod
+    def _tracked(path: str) -> str:
+        return subprocess.run(
+            ["git", "ls-files", path], cwd=str(ROOT), text=True, capture_output=True
+        ).stdout
+
+    def test_documented_link_limits_match_the_default_policy(self) -> None:
+        section = self._section()
+        limits = email_summary.DEFAULT_POLICY["limits"]
+
+        self.assertIn(f"{limits['max_links_per_email']} links per email", section)
+        self.assertIn(f"{limits['max_links_total']} links in total", section)
+
+    def test_the_three_editable_files_are_all_named(self) -> None:
+        section = self._section()
+
+        for name in ("email_summary_prompt.md", "topic.md", "email_link_policy.md"):
+            with self.subTest(name=name):
+                self.assertIn(name, section)
+
+        # 三个文件的归属不同，文档说反了读者就会去改错的那份
+        self.assertTrue((ROOT / "outputs" / "email_summary_prompt.md").exists(), "prompt 直接入库，安装时会被覆盖")
+        for user_file in ("topic.md", "email_link_policy.md"):
+            with self.subTest(user_file=user_file):
+                self.assertTrue((ROOT / "outputs" / f"{user_file}.example").exists())
+                self.assertEqual(self._tracked(f"outputs/{user_file}"), "", "用户文件不该入库，否则同步会盖掉界面上的编辑")
+
+    def test_every_flag_the_section_documents_really_exists(self) -> None:
+        """flag 改名而 README 不动，读者照着敲只会得到 argparse 报错。"""
+        documented = sorted(set(re.findall(r"--[a-z][a-z0-9-]+", self._section())))
+        help_text = run_podsum("email-summary", "--help").stdout
+
+        self.assertTrue(documented, "这一节本来就该给出可照抄的命令")
+        for flag in documented:
+            with self.subTest(flag=flag):
+                self.assertIn(flag, help_text)
 
 
 if __name__ == "__main__":

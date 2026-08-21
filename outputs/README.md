@@ -381,6 +381,48 @@ Migrate old state files:
 "$PODSUM_PYTHON" "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" migrate-state
 ```
 
+## Editable Email Summary Files
+
+Three files control the email brief. Edit them and the next run picks the change
+up; no code change is necessary. All three live in the deployment directory next
+to `podsum.py`.
+
+`email_summary_prompt.md` ships with the repository and `scripts/install.sh`
+overwrites it on every install, so keep local wording changes in the repository
+copy. `topic.md` and `email_link_policy.md` are yours: the repository tracks only
+a `.example` template for each, the installer creates the real file when it is
+missing, and it never overwrites one that already exists.
+
+| File | Change it when you want to change |
+|---|---|
+| `email_summary_prompt.md` | How the brief is written: section structure, per-link expansion of digest mail, how evidence limits are worded, how sources are embedded as Markdown links. |
+| `topic.md` | Which topics the brief tracks. Only mail that matches a topic reaches the main sections, so add a topic here to surface something, and reorder priority here to change what leads. |
+| `email_link_policy.md` | How mail is classified and how many links get fetched: 2 links per email, 10 links in total, plus the URL patterns to skip. |
+
+### Verify a change without rereading the mailbox
+
+Reuse the scan file the last run already wrote, and keep delivery off:
+
+```sh
+export PODSUM_HOME="${PODSUM_HOME:-$HOME/Library/Application Support/Podsum}"
+"$PODSUM_PYTHON" "$PODSUM_HOME/outputs/podsum.py" email-summary \
+  --scan-file ~/Podcasts/AutoDownloads/EmailReports/email-scan-$(date +%F).json \
+  --summary-engine podsum --no-send
+```
+
+The command rewrites `EmailReports/email-summary-<date>.md` in place, so copy the
+old file first if you want to diff the two.
+
+Do not add `--dry-run` when the change is in `email_summary_prompt.md`. Dry-run
+deliberately skips the language model and falls back to the deterministic
+template, so it cannot show a prompt change at all. Dry-run is still the right
+switch for `topic.md` and `email_link_policy.md`, because classification, topic
+matching and link limits all run before the model is called.
+
+If a run falls back to the template — because the model call failed, timed out,
+or returned nothing — the brief says so in its evidence-boundary section. A brief
+without that note came from the model.
+
 ## Transcription Model
 
 Default model:

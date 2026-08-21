@@ -42,6 +42,7 @@ class EmailRunContext:
     fetcher: Any
     reason: str
     review: dict[str, Any]
+    brief_writer: Any
     pack: EmailEvidencePack | None
     needs: dict[str, Any] | None
     composition: brief_agent.BriefComposition | None
@@ -63,6 +64,7 @@ def build_email_run_context(
     fetcher: Any,
     reason: str,
     review: dict[str, Any],
+    brief_writer: Any = None,
 ) -> EmailRunContext:
     return EmailRunContext(
         policy=policy,
@@ -72,6 +74,7 @@ def build_email_run_context(
         fetcher=fetcher,
         reason=reason,
         review=review,
+        brief_writer=brief_writer,
         pack=None,
         needs=None,
         composition=None,
@@ -159,6 +162,7 @@ def compose_brief(state: EmailRunState, config: RunnableConfig) -> dict[str, Any
         str(brief_path),
         context.review,
         context.reason,
+        context.brief_writer,
     )
     return {**_transition(state, "compose_brief"), "brief_path": str(brief_path)}
 
