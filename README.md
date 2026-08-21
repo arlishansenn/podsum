@@ -21,26 +21,23 @@ IMAP/Gmail 邮件，生成结构化的 scan JSON 文件，用 Hermes 生成摘�
 
 ## 解读规则
 
-每集解读用的完整 prompt 是
-[`outputs/hermes_interpretation_prompt.md`](outputs/hermes_interpretation_prompt.md)。
-里面写死了内置要求（输出结构、长度区间、忌用的句式等），由项目维护，平时不用动。
-它中间留了一个 `{rules}` 占位符：
+`outputs/interpretation_rules.md` 的内容注入
+`outputs/hermes_interpretation_prompt.md` 的 `{rules}` 占位符，位置在内置要求之
+后，冲突时以规则文件为准。
 
 ```text
 你是 Podsum 的 podcast 深度解读器……
 要求：
-- ……（内置要求，到这里结束）
+- ……（内置要求）
 
-{rules}            ← outputs/interpretation_rules.md 的内容填进这里
+{rules}            ← outputs/interpretation_rules.md
 
 MEMORY.md: ……
 Podcast: ……
 文字稿节选: ……
 ```
 
-想调解读口味，只改
-[`outputs/interpretation_rules.md`](outputs/interpretation_rules.md)，不碰 prompt
-模板。中文自然语言，一行一条：
+规则用中文自然语言，一行一条：
 
 ```text
 - 这一集偏技术，多留代码细节和具体数字。
@@ -48,16 +45,10 @@ Podcast: ……
 - 嘉宾的个人经历部分可以略过。
 ```
 
-因为规则填在内置要求**之后**，同一件事两边说法不同时以你写的为准。上面第二条就会
-盖掉内置的「800-1500 中文字」。
-
-这个文件仓库里已经有了，初始内容是一段 HTML 注释写的使用说明。注释会被剥离，所以
-开箱状态等于「一条规则都没有」，解读行为和这个功能上线前逐字相同。你在注释外面写
-字，规则才开始生效；把字删光就回到初始状态。整个文件删掉也不报错，同样按「没有规
-则」处理。
-
-剥离注释后的内容超过 4000 字会被截断。临时换一份规则用
-`--interpretation-rules <path>`。
+- HTML 注释会被剥离。文件初始内容全是注释，即零条规则。
+- 剥离后超过 4000 字截断。
+- 文件不存在时按零条规则处理。
+- `--interpretation-rules <path>` 换用别的规则文件。
 
 ## Hermes Skills
 
