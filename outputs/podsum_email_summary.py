@@ -2587,6 +2587,29 @@ def prune_empty_signal_sections(markdown: str) -> str:
     return "\n\n".join(pruned).rstrip() + "\n"
 
 
+def render_summary_prompt(prompt_path: Path, scan: dict[str, Any], payload: dict[str, Any]) -> str:
+    """把 scan 填进 email_summary_prompt.md 的占位符。
+
+    podsum 与 hermes 两条引擎填的是同一组占位符，只有 scan_json 的来源不同：前者给
+    原始 scan，后者给预处理摘要。分开写的话，prompt 里加一个占位符就会在漏改的那条
+    路径上抛 KeyError。
+    """
+    return prompt_path.read_text(encoding="utf-8").format(
+        date=scan["date"],
+        generated_at=now_stamp(),
+        account=scan.get("account", ""),
+        window=scan.get("window", ""),
+        raw_count=scan.get("raw_count", 0),
+        scan_date=scan["date"],
+        scan_json=json.dumps(payload, ensure_ascii=False, indent=2),
+    )
+
+
+def template_fallback_brief(scan: dict[str, Any], reason: str, cause: str) -> str:
+    """降级必须写进正文，否则没人知道今天这份是模板产出的。"""
+    return build_intel_brief_draft(scan, reason, notice=f"降级：{cause}，本篇由确定性模板产出。")
+
+
 def llm_brief_markdown(
     scan: dict[str, Any],
     *,
@@ -2601,20 +2624,12 @@ def llm_brief_markdown(
     模板是兜底不是常态：不调 LLM 的 brief 只能一行一封邮件地罗列，没有判断。
     降级必须写进正文，否则没人知道今天这份是模板产出的。
     """
-    prompt = prompt_path.read_text(encoding="utf-8").format(
-        date=scan["date"],
-        generated_at=now_stamp(),
-        account=scan.get("account", ""),
-        window=scan.get("window", ""),
-        raw_count=scan.get("raw_count", 0),
-        scan_date=scan["date"],
-        scan_json=json.dumps(scan, ensure_ascii=False, indent=2),
-    )
+    prompt = render_summary_prompt(prompt_path, scan, scan)
     ok, value = run_hermes_prompt(str(hermes), prompt, cwd=str(project_dir), timeout=timeout)
     if not ok:
-        return build_intel_brief_draft(scan, reason, notice=f"降级：LLM 调用失败（{value}），本篇由确定性模板产出。")
+        return template_fallback_brief(scan, reason, f"LLM 调用失败（{value}）")
     if not str(value or "").strip():
-        return build_intel_brief_draft(scan, reason, notice="降级：LLM 返回空输出，本篇由确定性模板产出。")
+        return template_fallback_brief(scan, reason, "LLM 返回空输出")
     return ensure_intel_brief_traceability(prune_empty_signal_sections(value), scan)
 
 
@@ -2629,17 +2644,7 @@ def render_report(args: argparse.Namespace, scan: dict[str, Any]) -> str:
         pack = EmailEvidencePack.from_dict(scan)
         topic_map = scan.get("topic_map", {}) if isinstance(scan.get("topic_map"), dict) else {}
         return brief_agent.compose_with_need_store(pack, topic_map, empty_need_store(), "", {}, "dry-run: skipped Hermes summary").email_intel_brief.markdown
-    digest = preprocessed_evidence_digest(args, scan)
-    scan_json = json.dumps(digest, ensure_ascii=False, indent=2)
-    prompt = args.email_summary_prompt.read_text(encoding="utf-8").format(
-        date=scan["date"],
-        generated_at=now_stamp(),
-        account=scan.get("account", ""),
-        window=scan.get("window", ""),
-        raw_count=scan.get("raw_count", 0),
-        scan_date=scan["date"],
-        scan_json=scan_json,
-    )
+    prompt = render_summary_prompt(args.email_summary_prompt, scan, preprocessed_evidence_digest(args, scan))
     ok, value = run_hermes_prompt(str(args.hermes), prompt, cwd=str(args.project_dir), timeout=args.hermes_timeout)
     if not ok:
         return build_intel_brief_draft(scan, f"Hermes 摘要失败：{value}")
@@ -2656,6 +2661,27 @@ def write_report(root: Path, scan: dict[str, Any], markdown: str) -> Path:
     return path
 
 
+def make_brief_writer(args: argparse.Namespace) -> Any:
+    """brief 的执笔人。dry-run 返回 None，表示不调 LLM、保持确定性输出。
+
+    模板是兜底不是常态：不调 LLM 的 brief 只能一行一封邮件地罗列，没有判断。
+    """
+    if args.dry_run:
+        return None
+
+    def write(scan: dict[str, Any], reason: str) -> str:
+        return llm_brief_markdown(
+            scan,
+            hermes=str(args.hermes),
+            prompt_path=args.email_summary_prompt,
+            project_dir=args.project_dir,
+            timeout=args.hermes_timeout,
+            reason=reason,
+        )
+
+    return write
+
+
 def run_podsum_email_graph(
     args: argparse.Namespace,
     scan: dict[str, Any] | None,
@@ -2669,19 +2695,6 @@ def run_podsum_email_graph(
     artifact_dir = email_reports_dir(args.output)
     source_scan = scan or _read_scan_file(scan_path)
     run_id = f"email-summary-{source_scan.get('date', now_stamp())}-{int(time.time())}"
-    # dry-run 不调 LLM，保持确定性输出；其余情况 brief 由 LLM 写，模板只做兜底。
-    brief_writer = None
-    if not args.dry_run:
-        def brief_writer(scan_dict: dict[str, Any], writer_reason: str) -> str:
-            return llm_brief_markdown(
-                scan_dict,
-                hermes=str(args.hermes),
-                prompt_path=args.email_summary_prompt,
-                project_dir=args.project_dir,
-                timeout=args.hermes_timeout,
-                reason=writer_reason,
-            )
-
     context = email_graph.build_email_run_context(
         policy,
         topic_map,
@@ -2690,7 +2703,7 @@ def run_podsum_email_graph(
         fetch_link_context,
         reason,
         {},
-        brief_writer,
+        make_brief_writer(args),
     )
     initial_state = email_graph.initial_email_run_state(
         run_id,

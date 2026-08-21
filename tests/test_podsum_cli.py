@@ -4330,6 +4330,7 @@ class DigestRenderingTest(unittest.TestCase):
         self.assertIn("](https://example.invalid/ok)", section)
         self.assertNotIn("空地址", section)
 
+
 class LlmBriefTest(unittest.TestCase):
     """podsum 引擎的 brief 必须由 LLM 写；模板是失败时的兜底，不是常态。"""
 
@@ -4376,7 +4377,7 @@ class LlmBriefTest(unittest.TestCase):
             markdown = email_summary.llm_brief_markdown(
                 self.SCAN,
                 hermes="/nonexistent/hermes",
-                prompt_path=ROOT / "outputs" / "email_summary_prompt.md",
+                prompt_path=EMAIL_SUMMARY_PROMPT,
                 project_dir=ROOT,
                 timeout=5,
                 reason=reason,
@@ -4433,6 +4434,38 @@ class LlmBriefTest(unittest.TestCase):
 
         self.assertIn("Fixture Follow-up", markdown)
         self.assertIn("降级", markdown)
+
+    @staticmethod
+    def _args(dry_run: bool) -> argparse.Namespace:
+        return argparse.Namespace(
+            dry_run=dry_run,
+            hermes=Path("/nonexistent/hermes"),
+            email_summary_prompt=EMAIL_SUMMARY_PROMPT,
+            project_dir=ROOT,
+            hermes_timeout=5,
+        )
+
+    def test_dry_run_gets_no_writer_so_it_never_reaches_the_llm(self) -> None:
+        """dry-run 一旦拿到 writer 就会真去调 Hermes，输出也不再确定。"""
+        self.assertIsNone(email_summary.make_brief_writer(self._args(dry_run=True)))
+
+    def test_real_run_gets_a_writer_that_routes_to_the_llm(self) -> None:
+        writer = email_summary.make_brief_writer(self._args(dry_run=False))
+        seen: dict[str, object] = {}
+        real = email_summary.llm_brief_markdown
+
+        def fake(scan, **kwargs):
+            seen.update(kwargs)
+            return "写好了"
+
+        email_summary.llm_brief_markdown = fake
+        try:
+            self.assertEqual(writer(self.SCAN, "内部原因"), "写好了")
+        finally:
+            email_summary.llm_brief_markdown = real
+
+        self.assertEqual(seen["prompt_path"], EMAIL_SUMMARY_PROMPT)
+        self.assertEqual(seen["reason"], "内部原因", "内部原因要一路带到兜底模板")
 
     def test_notice_is_user_facing_while_reason_stays_internal(self) -> None:
         """降级要让用户看见，但内部处理用语不能进正文——既有契约禁止暴露处理流程。"""
