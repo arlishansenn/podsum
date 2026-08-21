@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """经 Hermes 将生成的 Podsum 报告 EPUB 投递到配置的目标（默认 Discord）。
 
-注：文件名 podsum_send_to_feishu.py 为历史原因保留（launchd plist 引用），
-实际投递目标由 --target 决定，传输统一由 podsum_core.delivery 的 Hermes adapter 完成。
+注：文件名 podsum_send_to_feishu.py 为历史原因保留，实际投递目标由 --target
+决定，传输统一由 podsum_core.delivery 的 Hermes adapter 完成。
 """
 
 from __future__ import annotations
