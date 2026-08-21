@@ -379,6 +379,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertNotIn("来源对象: EmailEvidencePack", prompt)
         self.assertNotIn("处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief", prompt)
         self.assertIn("合并重复、营销、低信号邮件", prompt)
+        self.assertIn("digest 类邮件例外", prompt)
         self.assertIn("跟踪话题提示", prompt)
         self.assertNotIn("EmailEvidencePack", prompt)
         self.assertIn("邮件片段不是完整正文", prompt)
@@ -4136,6 +4137,36 @@ class PodsumCliTest(unittest.TestCase):
         ]
         payload = email_summary.scan_payload("", 1, 20, len(items), list(items))
         self.assertEqual([item["uid"] for item in payload["items"]], ["1"])
+
+    def test_email_summary_prompt_requires_digest_items_to_be_expanded(self) -> None:
+        """digest 类邮件本身没有内容，它的内容就是那张链接列表——压成一行等于丢掉全部信息。"""
+        prompt = (ROOT / "outputs" / "email_summary_prompt.md").read_text(encoding="utf-8")
+
+        # 三类必须点名，否则模型只会认字面上的 "digest"
+        for email_type in ("google_alert", "digest", "newsletter_article"):
+            with self.subTest(email_type=email_type):
+                self.assertIn(email_type, prompt)
+
+        self.assertIn("逐条展开", prompt)
+        self.assertIn("不允许压成一行", prompt)
+        self.assertIn("每个子条目一行", prompt)
+        self.assertIn("normalized_url", prompt)
+        self.assertIn("不超过一行", prompt)
+
+    def test_email_summary_prompt_merges_same_subject_digests_by_url(self) -> None:
+        """按 subject 判重会整封丢弃：8/19 的 RWA 快讯就是这样整个消失的。"""
+        prompt = (ROOT / "outputs" / "email_summary_prompt.md").read_text(encoding="utf-8")
+
+        self.assertIn("按链接地址去重", prompt)
+        self.assertIn("不要按邮件主题判重", prompt)
+        self.assertIn("整封丢弃", prompt)
+
+    def test_email_summary_prompt_keeps_unenriched_links_clickable(self) -> None:
+        """pending 的链接仍是有效点击目标：指向来源本身就是它的用途，不是未验证论断。"""
+        prompt = (ROOT / "outputs" / "email_summary_prompt.md").read_text(encoding="utf-8")
+
+        self.assertIn("尚未抓取正文的链接", prompt)
+        self.assertIn("不构成未验证论断", prompt)
 
 
 if __name__ == "__main__":
