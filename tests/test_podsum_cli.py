@@ -117,8 +117,8 @@ class PodsumCliTest(unittest.TestCase):
                 date="2026-07-05",
                 host="127.0.0.1",
                 port=0,
-                policy_file=ROOT / "outputs" / "email_link_policy.md",
-                topic_file=ROOT / "outputs" / "topic.md",
+                policy_file=ROOT / "outputs" / "email_link_policy.md.example",
+                topic_file=ROOT / "outputs" / "topic.md.example",
             )
             commands = email_workbench.commands_payload(config)["commands"]
         finally:
@@ -217,8 +217,8 @@ class PodsumCliTest(unittest.TestCase):
                 date="2026-07-05",
                 host="127.0.0.1",
                 port=0,
-                policy_file=ROOT / "outputs" / "email_link_policy.md",
-                topic_file=ROOT / "outputs" / "topic.md",
+                policy_file=ROOT / "outputs" / "email_link_policy.md.example",
+                topic_file=ROOT / "outputs" / "topic.md.example",
             )
             server, thread, base_url = start_workbench(config)
             try:
@@ -315,8 +315,8 @@ class PodsumCliTest(unittest.TestCase):
                 date="2026-07-05",
                 host="127.0.0.1",
                 port=0,
-                policy_file=ROOT / "outputs" / "email_link_policy.md",
-                topic_file=ROOT / "outputs" / "topic.md",
+                policy_file=ROOT / "outputs" / "email_link_policy.md.example",
+                topic_file=ROOT / "outputs" / "topic.md.example",
             )
             server, thread, base_url = start_workbench(config)
             try:
@@ -443,14 +443,14 @@ class PodsumCliTest(unittest.TestCase):
         self.assertNotIn("可靠判断", pruned)
 
     def test_email_link_policy_parses_from_markdown(self) -> None:
-        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
 
         self.assertEqual(policy["object_type"], "email_policy")
         self.assertEqual(policy["limits"]["max_links_per_email"], 2)
         self.assertTrue(any(item["name"] == "newsletter_article" for item in policy["email_types"]))
 
     def test_email_topic_map_parses_from_markdown(self) -> None:
-        topic_map = email_summary.load_topic_map(ROOT / "outputs" / "topic.md")
+        topic_map = email_summary.load_topic_map(ROOT / "outputs" / "topic.md.example")
 
         self.assertEqual(topic_map["object_type"], "email_topic_map")
         self.assertGreaterEqual(len(topic_map["topics"]), 3)
@@ -459,7 +459,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertTrue(all(item.get("examples") for item in topic_map["topics"]))
 
     def test_email_evidence_pack_applies_topic_matches(self) -> None:
-        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
         topic_map = {
             "object_type": "email_topic_map",
             "version": 1,
@@ -503,7 +503,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertEqual(scan["items"][0]["topics"][0]["name"], "Tracked Agent Work")
 
     def test_email_message_item_fills_evidence_with_link_contexts(self) -> None:
-        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
         message = EmailMessage()
         message["From"] = "Fixture Sender <sender@example.invalid>"
         message["To"] = "Fixture Receiver <receiver@example.invalid>"
@@ -562,7 +562,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertEqual(snippet_evidence[0]["body_part_count"], 2)
 
     def test_email_message_item_uses_informative_body_block_not_preview_padding(self) -> None:
-        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
         message = EmailMessage()
         message["From"] = "Daily Digest <digest@example.invalid>"
         message["To"] = "Fixture Receiver <receiver@example.invalid>"
@@ -601,7 +601,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertEqual(snippet_evidence[0]["reason"], "snippet_only")
 
     def test_email_message_item_prefers_mailparser_cleaned_payload(self) -> None:
-        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
         message = EmailMessage()
         message["From"] = "Daily Digest <digest@example.invalid>"
         message["To"] = "Fixture Receiver <receiver@example.invalid>"
@@ -671,7 +671,7 @@ class PodsumCliTest(unittest.TestCase):
                 os.environ["PODSUM_NODE"] = original_node
 
     def test_normalize_evidence_pack_recomputes_low_signal_legacy_snippet_evidence(self) -> None:
-        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
         scan = {
             "date": "2026-07-05",
             "items": [
@@ -716,7 +716,7 @@ class PodsumCliTest(unittest.TestCase):
                 "content_type": "text/html",
             }
 
-        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
         topic_map = {"object_type": "email_topic_map", "version": 1, "topics": []}
         classifier = FakeLinkClassifier(
             {
@@ -774,7 +774,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertEqual(links[1]["confidence"], 0.2)
 
     def test_email_evidence_agent_builds_pack_from_eml_message(self) -> None:
-        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
         topic_map = {
             "object_type": "email_topic_map",
             "version": 1,
@@ -806,7 +806,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertIn("snippet_only", item["risks"])
 
     def test_scan_file_snippet_urls_become_link_candidates(self) -> None:
-        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
         scan = {
             "date": "2026-07-05",
             "items": [
@@ -832,7 +832,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertEqual(snippet_evidence[0]["link_count"], 1)
 
     def test_email_dataclass_schemas_round_trip_scan_and_workbench_brief(self) -> None:
-        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
         scan = email_summary.normalize_evidence_pack(
             {
                 "date": "2026-07-05",
@@ -1334,8 +1334,8 @@ class PodsumCliTest(unittest.TestCase):
                 date="2026-07-05",
                 host="127.0.0.1",
                 port=0,
-                policy_file=ROOT / "outputs" / "email_link_policy.md",
-                topic_file=ROOT / "outputs" / "topic.md",
+                policy_file=ROOT / "outputs" / "email_link_policy.md.example",
+                topic_file=ROOT / "outputs" / "topic.md.example",
             )
             server, thread, base_url = start_workbench(config)
             try:
@@ -1420,8 +1420,8 @@ class PodsumCliTest(unittest.TestCase):
                 date="2026-07-05",
                 host="127.0.0.1",
                 port=0,
-                policy_file=ROOT / "outputs" / "email_link_policy.md",
-                topic_file=ROOT / "outputs" / "topic.md",
+                policy_file=ROOT / "outputs" / "email_link_policy.md.example",
+                topic_file=ROOT / "outputs" / "topic.md.example",
             )
             server, thread, base_url = start_workbench(config)
             try:
@@ -1544,8 +1544,8 @@ class PodsumCliTest(unittest.TestCase):
                 date="2026-07-05",
                 host="127.0.0.1",
                 port=0,
-                policy_file=ROOT / "outputs" / "email_link_policy.md",
-                topic_file=ROOT / "outputs" / "topic.md",
+                policy_file=ROOT / "outputs" / "email_link_policy.md.example",
+                topic_file=ROOT / "outputs" / "topic.md.example",
             )
             server, thread, base_url = start_workbench(config)
             try:
@@ -1579,7 +1579,7 @@ class PodsumCliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             policy_file = tmp_path / "email_link_policy.md"
-            original = (ROOT / "outputs" / "email_link_policy.md").read_text(encoding="utf-8")
+            original = (ROOT / "outputs" / "email_link_policy.md.example").read_text(encoding="utf-8")
             policy_file.write_text(original, encoding="utf-8")
             config = email_workbench.WorkbenchConfig(
                 root=tmp_path / "downloads",
@@ -1587,7 +1587,7 @@ class PodsumCliTest(unittest.TestCase):
                 host="127.0.0.1",
                 port=0,
                 policy_file=policy_file,
-                topic_file=ROOT / "outputs" / "topic.md",
+                topic_file=ROOT / "outputs" / "topic.md.example",
             )
             server, thread, base_url = start_workbench(config)
             try:
@@ -1604,14 +1604,14 @@ class PodsumCliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             topic_file = tmp_path / "topic.md"
-            original = (ROOT / "outputs" / "topic.md").read_text(encoding="utf-8")
+            original = (ROOT / "outputs" / "topic.md.example").read_text(encoding="utf-8")
             topic_file.write_text(original, encoding="utf-8")
             config = email_workbench.WorkbenchConfig(
                 root=tmp_path / "downloads",
                 date="2026-07-05",
                 host="127.0.0.1",
                 port=0,
-                policy_file=ROOT / "outputs" / "email_link_policy.md",
+                policy_file=ROOT / "outputs" / "email_link_policy.md.example",
                 topic_file=topic_file,
             )
             server, thread, base_url = start_workbench(config)
@@ -1633,8 +1633,8 @@ class PodsumCliTest(unittest.TestCase):
                 date="2026-07-05",
                 host="127.0.0.1",
                 port=0,
-                policy_file=ROOT / "outputs" / "email_link_policy.md",
-                topic_file=ROOT / "outputs" / "topic.md",
+                policy_file=ROOT / "outputs" / "email_link_policy.md.example",
+                topic_file=ROOT / "outputs" / "topic.md.example",
             )
             server, thread, base_url = start_workbench(config)
             try:
@@ -1647,7 +1647,7 @@ class PodsumCliTest(unittest.TestCase):
             self.assertEqual(caught.exception.code, 403)
 
     def test_email_link_enrichment_uses_fake_fetcher(self) -> None:
-        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
         item = {
             "uid": "fixture",
             "from": "Newsletter <sender@example.invalid>",
@@ -1688,7 +1688,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertNotIn("snippet_only", item["risks"])
 
     def test_email_link_enrichment_skips_tracking_urls(self) -> None:
-        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
         item = {
             "uid": "fixture",
             "from": "Newsletter <sender@example.invalid>",
@@ -1716,7 +1716,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertIn("tracking_skipped", item["risks"])
 
     def test_normalize_evidence_pack_prunes_legacy_skipped_public_link_evidence(self) -> None:
-        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
         scan = email_summary.normalize_evidence_pack(
             {
                 "date": "2026-07-05",
@@ -1762,7 +1762,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertNotIn("Bangun", json.dumps(evidence, ensure_ascii=False))
 
     def test_topic_guided_link_triage_selects_only_matching_canonical_targets(self) -> None:
-        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
         policy["limits"]["max_links_total"] = 3
         policy["limits"]["max_links_per_email"] = 2
         calls: list[str] = []
@@ -1842,7 +1842,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertEqual(fetched_urls, calls)
 
     def test_topic_guided_link_triage_blocks_unmapped_alert_until_topic_matches(self) -> None:
-        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
         policy["limits"]["max_links_total"] = 2
         policy["limits"]["max_links_per_email"] = 2
         scan = {
@@ -1880,7 +1880,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertEqual(matched["items"][0]["link_triage"]["groups"][0]["decision"], "fetch")
 
     def test_email_link_budget_exhaustion_marks_links_without_skipped_evidence(self) -> None:
-        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
         policy["limits"]["max_links_total"] = 1
         policy["limits"]["max_links_per_email"] = 1
         scan = {
@@ -1957,7 +1957,7 @@ class PodsumCliTest(unittest.TestCase):
         self.assertFalse(checklist["ready_to_send"])
 
     def test_email_intel_brief_draft_from_evidence_is_reviewable(self) -> None:
-        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+        policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
         scan = email_summary.normalize_evidence_pack(
             {
                 "date": "2026-07-05",
@@ -2388,6 +2388,8 @@ class PodsumCliTest(unittest.TestCase):
                 str(scan_file),
                 "--output",
                 str(tmp_path / "downloads"),
+                "--email-topic-file",
+                str(ROOT / "outputs" / "topic.md.example"),
                 "--dry-run",
                 "--no-send",
             )
@@ -2435,8 +2437,8 @@ class PodsumCliTest(unittest.TestCase):
                 ],
             }
             scan_file.write_text(json.dumps(scan), encoding="utf-8")
-            policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
-            topic_map = email_summary.load_topic_map(ROOT / "outputs" / "topic.md")
+            policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
+            topic_map = email_summary.load_topic_map(ROOT / "outputs" / "topic.md.example")
             context = email_graph.build_email_run_context(
                 policy,
                 topic_map,
@@ -2544,7 +2546,7 @@ class PodsumCliTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md")
+            policy = email_summary.load_link_policy(ROOT / "outputs" / "email_link_policy.md.example")
             topic_map = {"object_type": "email_topic_map", "version": 1, "topics": []}
             context = email_graph.build_email_run_context(
                 policy,
@@ -3671,8 +3673,11 @@ class PodsumCliTest(unittest.TestCase):
 
     def test_shipped_interpretation_rules_file_is_empty_so_default_output_is_unchanged(self) -> None:
         self.assertIn("{rules}", sender.DEFAULT_INTERPRETATION_PROMPT.read_text(encoding="utf-8"))
-        self.assertTrue(sender.DEFAULT_INTERPRETATION_RULES.exists())
-        self.assertEqual(sender.interpretation_rules_block(sender.DEFAULT_INTERPRETATION_RULES), "")
+        template = sender.DEFAULT_INTERPRETATION_RULES.with_suffix(".md.example")
+        self.assertTrue(template.exists(), "规则模板必须随仓库发布")
+        self.assertEqual(sender.interpretation_rules_block(template), "")
+        # 真实文件不入库；缺席时必须与模板同样产出空串，否则新机器上的解读会变样。
+        self.assertEqual(sender.interpretation_rules_block(Path("/nowhere/interpretation_rules.md")), "")
 
     def test_interpretation_rules_flag_defaults_to_the_shipped_file_in_both_entrypoints(self) -> None:
         self.assertEqual(
