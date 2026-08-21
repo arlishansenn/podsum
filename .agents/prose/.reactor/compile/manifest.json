@@ -1,0 +1,17 @@
+{
+  "compiled_at": "2026-07-14T03:38:35.883Z",
+  "contract_set_fingerprint": "sha256:afd50400073a59d3ee021f1d80b8a51422095f9c2b4c8fe64303fdf2fe9b03c6",
+  "cost": {
+    "model": "newapi/gpt-5.5",
+    "provider": "openai",
+    "surprise_cause": "self",
+    "tokens": {
+      "fresh": 162269,
+      "reused": 0
+    }
+  },
+  "edges": 8,
+  "model": "newapi/gpt-5.5",
+  "nodes": 7,
+  "sdk_version": "0.3.1"
+}

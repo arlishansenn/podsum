@@ -264,14 +264,15 @@ def run_once(args: argparse.Namespace) -> int:
     else:
         sent_count = send_ready(args, state)
         log(f"Sent {sent_count} episode(s).")
+    # cleanup 是本次运行已完成工作的收尾，不能被下游可选步骤的失败挡住：
+    # 邮件摘要一失败就提前返回，会让当天所有 retention 策略静默停摆。
+    email_result = 0
     if getattr(args, "email_summary", False):
-        result = run_email_summary(email_summary_args_from_podsum(args))
-        if result != 0:
-            return result
+        email_result = run_email_summary(email_summary_args_from_podsum(args))
     else:
         log("Email summary skipped.")
     cleanup_if_requested(args, state)
-    return 0
+    return email_result
 
 
 def download(args: argparse.Namespace) -> int:

@@ -1,0 +1,98 @@
+{
+  "contract_fingerprints": {
+    "5ZPQV9NQVE4W4FR40F9XSCJ7TW": "sha256:7c7c9de4ea0611d9713b8e6b1ef6130b5e696cf24deaecba2ed265214dc057fe",
+    "77CTSX38RYPEE7AM92CMCGE5W3": "sha256:1c48092ec740710994d2cf7a765982f29187a1c6c53c0c2250665de5deed6ec0",
+    "7R6QX8GZ3EW3S7PVJ9KQ6E2D4M": "sha256:660f7f2313eaaa5bb3f8f55ea680929398cfaf86d299d3154e25b285f28d6ecf",
+    "email-evidence-gateway": "sha256:8d7052737be80a2463f0e9e97a1c59171aef5c16d2d559eb82f1a9a168d39ada",
+    "email-ingress-gateway": "sha256:bd0ead6d9feeedc4ea7b66bd02e015d66be330ae5c4ba4132e256623bc9e5242",
+    "email-review-responsibility": "sha256:63d05096aa46dc112d9336fd6773e819900974f42eb6be3a86be7bcb60ec84bd",
+    "workbench-action-gateway": "sha256:4d1b9086b72c15e4790b2e37cdddad7539be9f535bb5d86197960017bb9d1664"
+  },
+  "topology": {
+    "acyclic": true,
+    "edges": [
+      {
+        "facet": "evidence_pack",
+        "producer": "email-evidence-gateway",
+        "subscriber": "5ZPQV9NQVE4W4FR40F9XSCJ7TW"
+      },
+      {
+        "facet": "evidence_action",
+        "producer": "workbench-action-gateway",
+        "subscriber": "5ZPQV9NQVE4W4FR40F9XSCJ7TW"
+      },
+      {
+        "facet": "incoming",
+        "producer": "email-ingress-gateway",
+        "subscriber": "77CTSX38RYPEE7AM92CMCGE5W3"
+      },
+      {
+        "facet": "evidence_pack_via",
+        "producer": "5ZPQV9NQVE4W4FR40F9XSCJ7TW",
+        "subscriber": "7R6QX8GZ3EW3S7PVJ9KQ6E2D4M"
+      },
+      {
+        "facet": "brief_action",
+        "producer": "workbench-action-gateway",
+        "subscriber": "7R6QX8GZ3EW3S7PVJ9KQ6E2D4M"
+      },
+      {
+        "facet": "delivery_action",
+        "producer": "workbench-action-gateway",
+        "subscriber": "7R6QX8GZ3EW3S7PVJ9KQ6E2D4M"
+      },
+      {
+        "facet": "email_intel_brief_reviewable",
+        "producer": "7R6QX8GZ3EW3S7PVJ9KQ6E2D4M",
+        "subscriber": "email-review-responsibility"
+      },
+      {
+        "facet": "review_action",
+        "producer": "workbench-action-gateway",
+        "subscriber": "email-review-responsibility"
+      }
+    ],
+    "entry_points": [
+      "email-evidence-gateway",
+      "email-ingress-gateway",
+      "workbench-action-gateway"
+    ],
+    "nodes": [
+      {
+        "contract_fingerprint": "sha256:7c7c9de4ea0611d9713b8e6b1ef6130b5e696cf24deaecba2ed265214dc057fe",
+        "node": "5ZPQV9NQVE4W4FR40F9XSCJ7TW",
+        "wake_source": "input"
+      },
+      {
+        "contract_fingerprint": "sha256:1c48092ec740710994d2cf7a765982f29187a1c6c53c0c2250665de5deed6ec0",
+        "node": "77CTSX38RYPEE7AM92CMCGE5W3",
+        "wake_source": "input"
+      },
+      {
+        "contract_fingerprint": "sha256:660f7f2313eaaa5bb3f8f55ea680929398cfaf86d299d3154e25b285f28d6ecf",
+        "node": "7R6QX8GZ3EW3S7PVJ9KQ6E2D4M",
+        "wake_source": "input"
+      },
+      {
+        "contract_fingerprint": "sha256:8d7052737be80a2463f0e9e97a1c59171aef5c16d2d559eb82f1a9a168d39ada",
+        "node": "email-evidence-gateway",
+        "wake_source": "external"
+      },
+      {
+        "contract_fingerprint": "sha256:bd0ead6d9feeedc4ea7b66bd02e015d66be330ae5c4ba4132e256623bc9e5242",
+        "node": "email-ingress-gateway",
+        "wake_source": "external"
+      },
+      {
+        "contract_fingerprint": "sha256:63d05096aa46dc112d9336fd6773e819900974f42eb6be3a86be7bcb60ec84bd",
+        "node": "email-review-responsibility",
+        "wake_source": "input"
+      },
+      {
+        "contract_fingerprint": "sha256:4d1b9086b72c15e4790b2e37cdddad7539be9f535bb5d86197960017bb9d1664",
+        "node": "workbench-action-gateway",
+        "wake_source": "external"
+      }
+    ]
+  }
+}

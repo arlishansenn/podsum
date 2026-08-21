@@ -1,0 +1,172 @@
+{
+  "default_material": true,
+  "facets": [
+    {
+      "facet": "email_review_via",
+      "paths": [
+        "email_review_via.object_type",
+        "email_review_via.version",
+        "email_review_via.brief.brief_id",
+        "email_review_via.brief.brief_fingerprint",
+        "email_review_via.brief.status",
+        "email_review_via.reviews",
+        "email_review_via.conflicts",
+        "email_review_via.processed_action_ids"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "material": true,
+      "path": "email_review_via.object_type",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "number": {
+        "quantum": null
+      },
+      "path": "email_review_via.version"
+    },
+    {
+      "material": true,
+      "path": "email_review_via.brief.brief_id",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "email_review_via.brief.brief_fingerprint",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "email_review_via.brief.status",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "collection": "set",
+      "material": true,
+      "path": "email_review_via.reviews"
+    },
+    {
+      "material": true,
+      "path": "email_review_via.reviews[].review_id",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "email_review_via.reviews[].brief_id",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "email_review_via.reviews[].brief_fingerprint",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "email_review_via.reviews[].reviewer_id",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "email_review_via.reviews[].kind",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "email_review_via.reviews[].status",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "email_review_via.reviews[].verdict",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "collection": "ordered",
+      "material": true,
+      "path": "email_review_via.reviews[].findings"
+    },
+    {
+      "material": true,
+      "path": "email_review_via.reviews[].action_ref",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "collection": "set",
+      "material": true,
+      "path": "email_review_via.conflicts"
+    },
+    {
+      "collection": "set",
+      "material": true,
+      "path": "email_review_via.processed_action_ids"
+    },
+    {
+      "material": true,
+      "path": "email_review_via.processed_action_ids[]",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": false,
+      "path": "email_review_via.*.fetched_at"
+    },
+    {
+      "material": false,
+      "path": "email_review_via.*.timestamp"
+    },
+    {
+      "material": false,
+      "path": "email_review_via.*.request_id"
+    },
+    {
+      "material": false,
+      "path": "email_review_via.*.receipt_id"
+    },
+    {
+      "material": false,
+      "path": "email_review_via.*.connector_cursor"
+    }
+  ],
+  "node": "email-review-responsibility"
+}

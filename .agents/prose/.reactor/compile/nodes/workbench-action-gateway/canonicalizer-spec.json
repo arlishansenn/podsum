@@ -1,0 +1,48 @@
+{
+  "default_material": true,
+  "facets": [
+    {
+      "facet": "evidence_action",
+      "paths": [
+        "evidence_action"
+      ]
+    },
+    {
+      "facet": "brief_action",
+      "paths": [
+        "brief_action"
+      ]
+    },
+    {
+      "facet": "review_action",
+      "paths": [
+        "review_action"
+      ]
+    },
+    {
+      "facet": "delivery_action",
+      "paths": [
+        "delivery_action"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "material": true,
+      "path": "evidence_action"
+    },
+    {
+      "material": true,
+      "path": "brief_action"
+    },
+    {
+      "material": true,
+      "path": "review_action"
+    },
+    {
+      "material": true,
+      "path": "delivery_action"
+    }
+  ],
+  "node": "workbench-action-gateway"
+}

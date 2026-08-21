@@ -1,0 +1,278 @@
+{
+  "name": "email-intel-brief-real-reactor",
+  "runnable": "pixie_qa/run_app.py:BriefRunnable",
+  "evaluators": [
+    "pixie_qa/evaluators.py:brief_contract",
+    "pixie_qa/evaluators.py:grounding_quality",
+    "pixie_qa/evaluators.py:source_coverage_quality"
+  ],
+  "entries": [
+    {
+      "input_data": {
+        "scenario": {
+          "request": "grounded-multi-source"
+        }
+      },
+      "description": "Routine grounded multi-source official announcement/security candidate.",
+      "expectation": "Produce only a current candidate brief grounded in the supplied official URLs; preserve coverage and safety constraints.",
+      "eval_input": [
+        {
+          "name": "evidence_pack_input",
+          "value": {
+            "scenario": {
+              "name": "official-security-multi-source",
+              "initial_pack": {
+                "object_type": "email_evidence_pack",
+                "object_version": "1",
+                "status": "complete",
+                "date": "2026-07-14",
+                "account": "public-official-sources",
+                "window": "2026-07-14",
+                "scan_limit": 3,
+                "raw_count": 3,
+                "possibly_truncated": false,
+                "items": [
+                  {
+                    "uid": "apple-security-2025-03-31",
+                    "date": "2025-03-31",
+                    "from": "Apple Product Security",
+                    "subject": "Apple security releases: iOS 18.4 and iPadOS 18.4",
+                    "snippet": "Apple published security content for iOS 18.4 and iPadOS 18.4.",
+                    "evidence": [
+                      {
+                        "url": "https://support.apple.com/en-us/122282",
+                        "final_url": "https://support.apple.com/en-us/122282",
+                        "title": "About the security content of iOS 18.4 and iPadOS 18.4",
+                        "excerpt": "This document describes the security content of iOS 18.4 and iPadOS 18.4.",
+                        "status": "fetched",
+                        "source": "official"
+                      }
+                    ]
+                  },
+                  {
+                    "uid": "cisa-kev-2025-02-18",
+                    "date": "2025-02-18",
+                    "from": "CISA",
+                    "subject": "CISA adds vulnerabilities to Known Exploited Vulnerabilities Catalog",
+                    "snippet": "CISA added vulnerabilities to its Known Exploited Vulnerabilities Catalog.",
+                    "evidence": [
+                      {
+                        "url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog",
+                        "final_url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog",
+                        "title": "Known Exploited Vulnerabilities Catalog",
+                        "excerpt": "CISA maintains the authoritative source of vulnerabilities known to be exploited in the wild.",
+                        "status": "fetched",
+                        "source": "official"
+                      }
+                    ]
+                  },
+                  {
+                    "uid": "openai-release-2025-02-27",
+                    "date": "2025-02-27",
+                    "from": "OpenAI",
+                    "subject": "Introducing GPT-4.5",
+                    "snippet": "OpenAI announced GPT-4.5 research preview.",
+                    "evidence": [
+                      {
+                        "url": "https://openai.com/index/introducing-gpt-4-5/",
+                        "final_url": "https://openai.com/index/introducing-gpt-4-5/",
+                        "title": "Introducing GPT-4.5",
+                        "excerpt": "OpenAI introduced GPT-4.5 as a research preview.",
+                        "status": "fetched",
+                        "source": "official"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "action": null
+            }
+          }
+        }
+      ]
+    },
+    {
+      "input_data": {
+        "scenario": {
+          "request": "conflicting-refuted"
+        }
+      },
+      "description": "Challenging real refutation action over conflicting official advisory evidence.",
+      "expectation": "Produce only a current candidate brief grounded in the supplied official URLs; preserve coverage and safety constraints.",
+      "eval_input": [
+        {
+          "name": "evidence_pack_input",
+          "value": {
+            "scenario": {
+              "name": "official-conflicting-refuted",
+              "initial_pack": {
+                "object_type": "email_evidence_pack",
+                "object_version": "1",
+                "status": "complete",
+                "date": "2026-07-14",
+                "account": "public-official-sources",
+                "window": "2026-07-14",
+                "scan_limit": 3,
+                "raw_count": 3,
+                "possibly_truncated": false,
+                "items": [
+                  {
+                    "uid": "cisa-original",
+                    "date": "2025-03-01",
+                    "from": "CISA",
+                    "subject": "CISA advisory initial status",
+                    "snippet": "Initial bulletin says the issue is being investigated.",
+                    "evidence": [
+                      {
+                        "url": "https://www.cisa.gov/news-events/alerts",
+                        "final_url": "https://www.cisa.gov/news-events/alerts",
+                        "title": "CISA Alerts",
+                        "excerpt": "CISA publishes current cybersecurity alerts and advisories.",
+                        "status": "fetched",
+                        "source": "official"
+                      }
+                    ]
+                  },
+                  {
+                    "uid": "cisa-correction",
+                    "date": "2025-03-02",
+                    "from": "CISA",
+                    "subject": "CISA advisory correction",
+                    "snippet": "Correction: the earlier status statement was inaccurate; use the updated advisory.",
+                    "evidence": [
+                      {
+                        "url": "https://www.cisa.gov/news-events/cybersecurity-advisories",
+                        "final_url": "https://www.cisa.gov/news-events/cybersecurity-advisories",
+                        "title": "CISA Cybersecurity Advisories",
+                        "excerpt": "CISA provides timely information on current security issues, vulnerabilities, and exploits.",
+                        "status": "fetched",
+                        "source": "official"
+                      }
+                    ]
+                  },
+                  {
+                    "uid": "nvd-status",
+                    "date": "2025-03-02",
+                    "from": "NIST NVD",
+                    "subject": "NVD vulnerability information",
+                    "snippet": "NVD provides U.S. government vulnerability management data.",
+                    "evidence": [
+                      {
+                        "url": "https://nvd.nist.gov/",
+                        "final_url": "https://nvd.nist.gov/",
+                        "title": "National Vulnerability Database",
+                        "excerpt": "The NVD is the U.S. government repository of standards based vulnerability management data.",
+                        "status": "fetched",
+                        "source": "official"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "action": {
+                "kind": "refutes",
+                "action_id": "eval-refute-cisa-original",
+                "from_subject": "CISA advisory correction",
+                "to_subject": "CISA advisory initial status",
+                "reason": "Later official correction refutes initial status."
+              }
+            }
+          }
+        }
+      ],
+      "evaluators": [
+        "...",
+        "pixie_qa/evaluators.py:refutation_handling_quality"
+      ]
+    },
+    {
+      "input_data": {
+        "scenario": {
+          "request": "redaction-update"
+        }
+      },
+      "description": "Challenging real owner redaction action requiring a fresh non-leaking candidate.",
+      "expectation": "Produce only a current candidate brief grounded in the supplied official URLs; preserve coverage and safety constraints.",
+      "eval_input": [
+        {
+          "name": "evidence_pack_input",
+          "value": {
+            "scenario": {
+              "name": "official-redaction-update",
+              "initial_pack": {
+                "object_type": "email_evidence_pack",
+                "object_version": "1",
+                "status": "complete",
+                "date": "2026-07-14",
+                "account": "public-official-sources",
+                "window": "2026-07-14",
+                "scan_limit": 3,
+                "raw_count": 3,
+                "possibly_truncated": false,
+                "items": [
+                  {
+                    "uid": "apple-security-2025-03-31",
+                    "date": "2025-03-31",
+                    "from": "Apple Product Security",
+                    "subject": "Apple security releases: iOS 18.4 and iPadOS 18.4",
+                    "snippet": "Apple published security content for iOS 18.4 and iPadOS 18.4.",
+                    "evidence": [
+                      {
+                        "url": "https://support.apple.com/en-us/122282",
+                        "final_url": "https://support.apple.com/en-us/122282",
+                        "title": "About the security content of iOS 18.4 and iPadOS 18.4",
+                        "excerpt": "This document describes the security content of iOS 18.4 and iPadOS 18.4.",
+                        "status": "fetched",
+                        "source": "official"
+                      }
+                    ]
+                  },
+                  {
+                    "uid": "cisa-kev-2025-02-18",
+                    "date": "2025-02-18",
+                    "from": "CISA",
+                    "subject": "CISA adds vulnerabilities to Known Exploited Vulnerabilities Catalog",
+                    "snippet": "CISA added vulnerabilities to its Known Exploited Vulnerabilities Catalog.",
+                    "evidence": [
+                      {
+                        "url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog",
+                        "final_url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog",
+                        "title": "Known Exploited Vulnerabilities Catalog",
+                        "excerpt": "CISA maintains the authoritative source of vulnerabilities known to be exploited in the wild.",
+                        "status": "fetched",
+                        "source": "official"
+                      }
+                    ]
+                  },
+                  {
+                    "uid": "openai-release-2025-02-27",
+                    "date": "2025-02-27",
+                    "from": "OpenAI",
+                    "subject": "Introducing GPT-4.5",
+                    "snippet": "OpenAI announced GPT-4.5 research preview.",
+                    "evidence": [
+                      {
+                        "url": "https://openai.com/index/introducing-gpt-4-5/",
+                        "final_url": "https://openai.com/index/introducing-gpt-4-5/",
+                        "title": "Introducing GPT-4.5",
+                        "excerpt": "OpenAI introduced GPT-4.5 as a research preview.",
+                        "status": "fetched",
+                        "source": "official"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "action": {
+                "kind": "redaction",
+                "action_id": "eval-redact-openai",
+                "target_subject": "Introducing GPT-4.5",
+                "reason": "Owner requested destruction of this obsolete announcement payload."
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

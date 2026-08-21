@@ -1,0 +1,18 @@
+{
+  "default_material": true,
+  "facets": [
+    {
+      "facet": "evidence_pack_via",
+      "paths": [
+        "evidence_pack_via"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "material": true,
+      "path": "evidence_pack_via"
+    }
+  ],
+  "node": "5ZPQV9NQVE4W4FR40F9XSCJ7TW"
+}

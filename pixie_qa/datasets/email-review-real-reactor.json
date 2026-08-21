@@ -1,0 +1,37 @@
+{
+  "name": "email-review-real-reactor",
+  "runnable": "pixie_qa/run_app.py:AppRunnable",
+  "evaluators": [
+    "pixie_qa/evaluators.py:review_contract",
+    "pixie_qa/evaluators.py:review_quality"
+  ],
+  "entries": [
+    {
+      "input_data": {"scenario": {"request": "review-public-announcements"}},
+      "description": "Review a real Agent Brief over two public official announcements, then submit the dynamically opposite human verdict through Gateway.",
+      "expectation": "The Agent review is specific and grounded; the opposite human review remains visibly conflicting without changing Brief authority.",
+      "eval_input": [{"name": "review_input", "value": {"scenario": {
+        "human_action_id": "review-eval-public-opposite-001",
+        "exercise_authority_rejection": false,
+        "initial_pack": {"object_type": "email_evidence_pack", "object_version": "1", "status": "complete", "date": "2026-07-14", "account": "public-official-review", "window": "2026-07-14", "scan_limit": 2, "raw_count": 2, "possibly_truncated": false, "items": [
+          {"uid": "review-openai-api-2025", "date": "2025-03-11", "from": "OpenAI", "subject": "OpenAI Responses API announcement", "snippet": "OpenAI introduced the Responses API for building agentic applications.", "evidence": [{"url": "https://openai.com/index/new-tools-for-building-agents/", "final_url": "https://openai.com/index/new-tools-for-building-agents/", "title": "New tools for building agents", "excerpt": "OpenAI introduced the Responses API and built-in tools for building agents.", "status": "fetched", "source": "official"}]},
+          {"uid": "review-github-copilot-2025", "date": "2025-04-04", "from": "GitHub", "subject": "GitHub Copilot agent mode announcement", "snippet": "GitHub announced agent mode for Copilot.", "evidence": [{"url": "https://github.blog/changelog/2025-04-04-github-copilot-agent-mode-is-generally-available/", "final_url": "https://github.blog/changelog/2025-04-04-github-copilot-agent-mode-is-generally-available/", "title": "GitHub Copilot agent mode is generally available", "excerpt": "GitHub announced the general availability of Copilot agent mode.", "status": "fetched", "source": "official"}]}
+        ]}
+      }}}]
+    },
+    {
+      "input_data": {"scenario": {"request": "review-authority-rejection"}},
+      "description": "Review public official security announcements and prove the real Gateway rejects an Agent confirmation without mutating the candidate Brief.",
+      "expectation": "The current-bound Review collection preserves the dynamic human conflict and rejects Agent confirm/lock authority.",
+      "eval_input": [{"name": "review_input", "value": {"scenario": {
+        "human_action_id": "review-eval-security-opposite-002",
+        "rejection_action_id": "review-eval-agent-confirm-rejected-002",
+        "exercise_authority_rejection": true,
+        "initial_pack": {"object_type": "email_evidence_pack", "object_version": "1", "status": "complete", "date": "2026-07-14", "account": "public-official-review", "window": "2026-07-14", "scan_limit": 2, "raw_count": 2, "possibly_truncated": false, "items": [
+          {"uid": "review-apple-security-2025", "date": "2025-03-31", "from": "Apple Product Security", "subject": "Apple iOS 18.4 security content", "snippet": "Apple published security content for iOS 18.4 and iPadOS 18.4.", "evidence": [{"url": "https://support.apple.com/en-us/122282", "final_url": "https://support.apple.com/en-us/122282", "title": "About the security content of iOS 18.4 and iPadOS 18.4", "excerpt": "This document describes the security content of iOS 18.4 and iPadOS 18.4.", "status": "fetched", "source": "official"}]},
+          {"uid": "review-cisa-kev-2025", "date": "2025-02-18", "from": "CISA", "subject": "CISA Known Exploited Vulnerabilities Catalog", "snippet": "CISA maintains its Known Exploited Vulnerabilities Catalog.", "evidence": [{"url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog", "final_url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog", "title": "Known Exploited Vulnerabilities Catalog", "excerpt": "CISA maintains the authoritative source of vulnerabilities known to be exploited in the wild.", "status": "fetched", "source": "official"}]}
+        ]}
+      }}}]
+    }
+  ]
+}

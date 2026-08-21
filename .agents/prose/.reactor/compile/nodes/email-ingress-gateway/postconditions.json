@@ -1,0 +1,4 @@
+{
+  "mode": "deterministic",
+  "node": "email-ingress-gateway"
+}

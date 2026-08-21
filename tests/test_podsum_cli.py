@@ -3757,6 +3757,44 @@ class PodsumCliTest(unittest.TestCase):
 
             self.assertEqual(seen["interpretation_rules"], rules)
 
+    def test_run_once_still_cleans_up_when_email_summary_fails(self) -> None:
+        """邮件摘要失败不该吃掉 cleanup：播客链路已经跑完，保留策略必须照常执行。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "state.json"
+            state_path.write_text(json.dumps({"episodes": {}, "feeds": {}}), encoding="utf-8")
+            args = argparse.Namespace(
+                state=state_path,
+                skip_download=True,
+                skip_transcribe=True,
+                skip_send=True,
+                email_summary=True,
+                cleanup=True,
+            )
+            calls = []
+
+            real_email, real_cleanup, real_log, real_from_podsum = (
+                podsum.run_email_summary,
+                podsum.cleanup_if_requested,
+                podsum.log,
+                podsum.email_summary_args_from_podsum,
+            )
+            podsum.run_email_summary = lambda _args: 1
+            podsum.email_summary_args_from_podsum = lambda _args: _args
+            podsum.cleanup_if_requested = lambda *_: calls.append("cleanup")
+            podsum.log = lambda message: None
+            try:
+                result = podsum.run_once(args)
+            finally:
+                (
+                    podsum.run_email_summary,
+                    podsum.cleanup_if_requested,
+                    podsum.log,
+                    podsum.email_summary_args_from_podsum,
+                ) = (real_email, real_cleanup, real_log, real_from_podsum)
+
+            self.assertEqual(calls, ["cleanup"])
+            self.assertNotEqual(result, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
