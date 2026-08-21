@@ -1,0 +1,258 @@
+diff --git a/node_modules/@openprose/reactor-cli/dist/commands/serve.js b/node_modules/@openprose/reactor-cli/dist/commands/serve.js
+index 64f6efa..c1592e9 100644
+--- a/node_modules/@openprose/reactor-cli/dist/commands/serve.js
++++ b/node_modules/@openprose/reactor-cli/dist/commands/serve.js
+@@ -125,6 +125,14 @@ async function bootReactorHandle(input) {
+     }
+     // 2. Load + re-lower (KEYLESS).
+     const loaded = (0, run_core_1.loadCompiledProject)(stateDir);
++    const contractsById = new Map(images.map((image) => [image.id, {
++            name: image.name,
++            requires: image.requires === undefined ? [] : [image.requires],
++            maintains: image.maintains === undefined ? [] : [image.maintains],
++            ...(image.continuity === undefined ? {} : { continuity: image.continuity }),
++            ...(image.execution === undefined ? {} : { execution: image.execution }),
++        }]));
++    const contractFor = (node) => contractsById.get(node) ?? loaded.contractFor(node);
+     // AUGMENT the loaded topology with a phantom-ingress edge per configured
+     // gateway, so a staged arrival moves the gateway's input fingerprint. The gateway
+     // itself is the real, NAMED, mounted Forme node; the phantom ingress is an
+@@ -149,7 +157,7 @@ async function bootReactorHandle(input) {
+     const built = (0, sandbox_1.buildSandboxRunner)(sandboxConfig, stateDir);
+     const render = {
+         ...baseRender,
+-        contractFor: baseRender.contractFor ?? ((node) => loaded.contractFor(node)),
++        contractFor: baseRender.contractFor ?? contractFor,
+         projectTruthFor: baseRender.projectTruthFor ??
+             ((node) => loaded.projectTruthFor(node)),
+         ...(baseRender.sandbox === undefined && built.runner !== undefined
+diff --git a/node_modules/@openprose/reactor-cli/dist/commands/trigger.js b/node_modules/@openprose/reactor-cli/dist/commands/trigger.js
+index 50d6081..713b94d 100644
+--- a/node_modules/@openprose/reactor-cli/dist/commands/trigger.js
++++ b/node_modules/@openprose/reactor-cli/dist/commands/trigger.js
+@@ -67,6 +67,8 @@ const connectors_1 = require("../run/connectors");
+ const ir_cache_1 = require("../compile/ir-cache");
+ const contract_images_1 = require("../compile/contract-images");
+ const config_1 = require("../config");
++const env_1 = require("../env");
++const provider_plan_1 = require("../model/provider-plan");
+ const meta_1 = require("../meta");
+ const compile_1 = require("./compile");
+ const emit_1 = require("./emit");
+@@ -113,6 +115,17 @@ async function runTriggerCommand(options, write = (line) => process.stdout.write
+     const contractsDir = path.resolve(options.projectDir ?? '.');
+     const model = config.model.compile_model;
+     const sdkVersion = (0, meta_1.resolveSdk)().version ?? 'unknown';
++    // 在编译或暂存副作用前解析，以便损坏的 provider 配置与 run、serve 一样
++    // 干净且可操作地退出。
++    let providerPlan;
++    try {
++        providerPlan = (0, provider_plan_1.resolveProviderPlan)(config.model);
++    }
++    catch (err) {
++        fireError(err);
++        fireTrigger('failure');
++        return (0, emit_1.emitError)(write, options.json, err instanceof Error ? err.message : String(err));
++    }
+     // Validate the state-dir target before the substrate mkdir's it (G12) — a file
+     // at the state-dir path otherwise surfaces a raw EEXIST with no guidance.
+     const stateDirError = (0, config_1.validateStateDirTarget)(stateDir);
+@@ -185,11 +198,30 @@ async function runTriggerCommand(options, write = (line) => process.stdout.write
+             contractFor: baseRender.contractFor ?? ((node) => loaded.contractFor(node)),
+             projectTruthFor: baseRender.projectTruthFor ?? ((node) => loaded.projectTruthFor(node)),
+         };
++        // 热编译缓存会绕过 compile 的密钥检查，故在这里检查真实 custom render，
++        // 防止其悄然回退到 OpenRouter。
++        const liveCustomRender = providerPlan.custom &&
++            options.testRender === undefined &&
++            options.offline !== true;
++        if (liveCustomRender && !(0, env_1.hasModelKey)(providerPlan.apiKeyEnv, contractsDir)) {
++            fireError(new Error('missing provider key'));
++            fireTrigger('failure');
++            return (0, emit_1.emitError)(write, options.json, (0, provider_plan_1.missingProviderKeyHint)(providerPlan));
++        }
+         const { reactor } = await (0, load_run_project_1.callRunProject)({
+             compiled: compiledForMount,
+             adapters,
+             render,
+-        });
++            renderModel: config.model.render_model,
++            ...(0, load_run_project_1.renderDecodingInputs)(config.model),
++            ...(liveCustomRender
++                ? {
++                    providerPlan,
++                    apiKey: (0, env_1.readModelKey)(providerPlan.apiKeyEnv, contractsDir),
++                    providerLabel: providerPlan.provider,
++                }
++                : {}),
++        }, options.testRunProjectImpl);
+         // When `--data` is given, STAGE it into the node's phantom-ingress inbox so the
+         // upcoming ingest is a memo-miss that delivers the payload (B3). `buildStageArrival`
+         // appends the item to the ingress source's published inbox, commits it (moving the
+@@ -217,7 +249,7 @@ async function runTriggerCommand(options, write = (line) => process.stdout.write
+             costReused: report.cost.reused,
+             dispositions: report.dispositions,
+         });
+-        return 0;
++        return anyFailed ? 1 : 0;
+     }
+     catch (err) {
+         // A thrown trigger (e.g. a live render/provider failure) fires the coarse
+diff --git a/node_modules/@openprose/reactor-cli/dist/run/load-run-project.js b/node_modules/@openprose/reactor-cli/dist/run/load-run-project.js
+index 4fb4569..e021f75 100644
+--- a/node_modules/@openprose/reactor-cli/dist/run/load-run-project.js
++++ b/node_modules/@openprose/reactor-cli/dist/run/load-run-project.js
+@@ -49,6 +49,7 @@ var __importStar = (this && this.__importStar) || (function () {
+ })();
+ Object.defineProperty(exports, "__esModule", { value: true });
+ exports.callRunProject = callRunProject;
++exports.renderDecodingInputs = renderDecodingInputs;
+ /** The model-bearing run-project barrel specifier (a variable so TS does not
+  * statically resolve the subpath under Node resolution — runtime resolves it
+  * against the built `dist`, exactly as the offline boundary intends: reached
+@@ -80,6 +81,13 @@ async function importRunProject() {
+  * results. NEVER hand-mounts (N3): `runProject` self-mounts via
+  * `compiledStoreCanonicalizer` + `createReactor` + `bootAsync`.
+  */
++/** 保留可选 decoding 配置，不臆造零值或 undefined。 */
++function renderDecodingInputs(model) {
++    return {
++        ...(model.temperature !== undefined ? { renderTemperature: model.temperature } : {}),
++        ...(model.reasoning_effort !== undefined ? { renderReasoningEffort: model.reasoning_effort } : {}),
++    };
++}
+ async function callRunProject(input, 
+ /**
+  * Test seam (OFFLINE gate): inject the `runProject` implementation so a test can
+@@ -99,8 +107,18 @@ runProjectImpl) {
+     // the run phase uses `model.render_model` rather than the SDK's gemini default.
+     // This is REQUIRED for a custom provider (whose endpoint 404s on the default id)
+     // and simply honors the config for the default provider.
+-    if (input.renderModel !== undefined) {
+-        render = { ...render, render: { ...(render.render ?? {}), model: input.renderModel } };
++    if (input.renderModel !== undefined ||
++        input.renderTemperature !== undefined ||
++        input.renderReasoningEffort !== undefined) {
++        render = {
++            ...render,
++            render: {
++                ...(render.render ?? {}),
++                ...(input.renderModel !== undefined ? { model: input.renderModel } : {}),
++                ...(input.renderTemperature !== undefined ? { temperature: input.renderTemperature } : {}),
++                ...(input.renderReasoningEffort !== undefined ? { reasoningEffort: input.renderReasoningEffort } : {}),
++            },
++        };
+     }
+     if (input.providerPlan !== undefined && input.apiKey !== undefined) {
+         const { buildLiveProvider } = await Promise.resolve().then(() => __importStar(require('../model/live-provider')));
+diff --git a/node_modules/@openprose/reactor-cli/dist/run/run-core.js b/node_modules/@openprose/reactor-cli/dist/run/run-core.js
+index 57c4f8d..fa2a562 100644
+--- a/node_modules/@openprose/reactor-cli/dist/run/run-core.js
++++ b/node_modules/@openprose/reactor-cli/dist/run/run-core.js
+@@ -149,24 +149,16 @@ const TEXT_DECODER = new TextDecoder();
+  * `.json` file under `state/`), and the projection parses that JSON into the
+  * `WorldModelValue` the compiled canonicalizer reduces.
+  *
+- * A node whose compiled canonicalizer emits NO named facets (`facets` empty —
+- * the atomic-only case) needs no structured projection (nothing subscribes to a
+- * named facet of it); it returns the empty projection. This mirrors the SDK
+- * offline gate's `projectTruthFor` (monitor projects its funding JSON; the brief
+- * returns `() => ({})`).
++ * 每个节点都依其持久化 spec 的 `fields[].path` 选择结构化 backing；这也包括
++ * `@atomic` 节点，使其 canonicalizer 能取得 material structured candidate。只有
++ * 没有字段时投影才为空对象。
+  */
+ function buildProjectTruthFor(ir, node) {
+     const entry = ir.perNode[node];
+     if (entry === undefined) {
+         return () => ({});
+     }
+-    const facets = entry.compiled.canonicalizer.facets;
+-    if (!Array.isArray(facets) || facets.length === 0) {
+-        // No named facet → no downstream subscriber on a facet → no structured
+-        // projection needed (the atomic body is fingerprinted whole by the SDK).
+-        return () => ({});
+-    }
+-    return (files) => projectStructuredJson(files);
++    return (files) => projectStructuredJson(files, entry.spec ?? entry.compiled.canonicalizer);
+ }
+ /**
+  * Project a node's published files into its structured `WorldModelValue` by
+@@ -174,30 +166,57 @@ function buildProjectTruthFor(ir, node) {
+  * + keyless (no model). Returns `{}` when no such file is present (cold/empty),
+  * so the canonicalizer reduces an empty structure rather than throwing.
+  */
+-function projectStructuredJson(files) {
+-    // Prefer a `state/*.json` file (the documented structured-backing convention);
+-    // fall back to any single `.json` file. A stable lexicographic pick keeps the
+-    // projection deterministic when several are present.
+-    const jsonPaths = Object.keys(files)
+-        .filter((p) => p.endsWith('.json'))
+-        .sort();
+-    const statePath = jsonPaths.find((p) => p.startsWith('state/'));
+-    const chosen = statePath ?? jsonPaths[0];
+-    if (chosen === undefined) {
+-        return {};
++function projectStructuredJson(files, canonicalizer) {
++    const paths = (Array.isArray(canonicalizer?.fields) ? canonicalizer.fields : [])
++        .map((field) => typeof field?.path === 'string' ? field.path : undefined)
++        .filter((path) => path !== undefined);
++    const parsed = [];
++    for (const filePath of Object.keys(files).filter((path) => path.endsWith('.json')).sort()) {
++        try {
++            parsed.push([filePath, JSON.parse(TEXT_DECODER.decode(files[filePath]))]);
++        }
++        catch {
++            // 损坏的 JSON 不是真实 structured backing。
++        }
++    }
++    const candidates = [];
++    if (parsed.length > 0) {
++        // world 文件路径本身可以含 slash 和 dot，故保留为一个 object key。
++        candidates.push({ order: 0, value: Object.fromEntries(parsed) });
+     }
+-    const bytes = files[chosen];
+-    if (bytes === undefined) {
+-        return {};
++    for (const [filePath, value] of parsed) {
++        candidates.push({ order: candidates.length, value });
+     }
+-    try {
+-        return JSON.parse(TEXT_DECODER.decode(bytes));
++    const facets = Array.isArray(canonicalizer?.facets) ? canonicalizer.facets : [];
++    if (facets.length === 1 && typeof facets[0]?.facet === 'string') {
++        const facet = facets[0].facet;
++        for (const [, value] of parsed) {
++            // 单 facet backing 可能直接写根对象；wrapper 同样参与确定性选择。
++            candidates.push({ order: candidates.length, value: { [facet]: value } });
++        }
++    }
++    let best;
++    for (const candidate of candidates) {
++        const present = canonicalPaths(candidate.value);
++        const score = paths.reduce((total, path) => total + (present.has(path) ? 1 : 0), 0);
++        if (best === undefined || score > best.score) {
++            best = { ...candidate, score };
++        }
++    }
++    // 无 field 或所有候选均不匹配时，绝不哈希任意 JSON。
++    return best === undefined || best.score === 0 ? {} : best.value;
++}
++/** 以 canonical serializer 的 prefix + '.' + objectKey 规则枚举存在路径。 */
++function canonicalPaths(value, prefix = '', paths = new Set()) {
++    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
++        return paths;
+     }
+-    catch {
+-        // A non-JSON or malformed body is not structured backing → empty value (the
+-        // canonicalizer then reduces nothing; never a thrown render).
+-        return {};
++    for (const [key, child] of Object.entries(value)) {
++        const path = prefix === '' ? key : `${prefix}.${key}`;
++        paths.add(path);
++        canonicalPaths(child, path, paths);
+     }
++    return paths;
+ }
+ // ---------------------------------------------------------------------------
+ // contractFor — a minimal per-node view so the SDK defaultContractFor (which

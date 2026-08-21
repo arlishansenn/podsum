@@ -1,0 +1,53 @@
+"use strict";
+// #28 独立真实黑盒：三份 contract、checked-in daemon、app venv ingress 与 Workbench HTTP。
+const assert = require("node:assert/strict");
+const { spawn, spawnSync } = require("node:child_process");
+const fs = require("node:fs"); const http = require("node:http"); const net = require("node:net"); const os = require("node:os"); const path = require("node:path");
+const prose = path.resolve(__dirname, ".."); const root = path.resolve(prose, "..", "..");
+const python = process.env.PODSUM_PYTHON || path.join(os.homedir(), "Library/Application Support/Podsum/.venv/bin/python");
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), "podsum-relations-")); const project = path.join(temp, "project"); const state = path.join(temp, "state"); const ledger = path.join(temp, "downloads/EmailReports/email-evidence-ledger.json"); const retentionAudit = path.join(temp, "redaction-retention-audit.jsonl");
+const env = { ...process.env, OPENAI_AGENTS_DISABLE_TRACING: "1", PYTHONPATH: path.join(root, "outputs") }; let daemon; let workbench;
+function port() { return new Promise((resolve, reject) => { const s = net.createServer(); s.once("error", reject); s.listen(0, "127.0.0.1", () => { const value = s.address().port; s.close(() => resolve(value)); }); }); }
+function request(p, method, pathname, body) { return new Promise((resolve, reject) => { const data = body === undefined ? undefined : JSON.stringify(body); const q = http.request({ host: "127.0.0.1", port: p, method, path: pathname, headers: data === undefined ? {} : { "content-type": "application/json", "content-length": Buffer.byteLength(data) } }, (r) => { let text = ""; r.on("data", (c) => { text += c; }); r.on("end", () => { try { resolve({ status: r.statusCode, body: JSON.parse(text) }); } catch (e) { reject(new Error(text)); } }); }); q.on("error", reject); if (data) q.write(data); q.end(); }); }
+async function ready(p) { const end = Date.now() + 300000; while (Date.now() < end) { try { if ((await request(p, "GET", "/health")).status === 200) return; } catch {} await new Promise((r) => setTimeout(r, 250)); } throw new Error("daemon compile readiness exceeded 300 seconds"); }
+async function stop(child) { if (!child || child.exitCode !== null) return; child.kill("SIGTERM"); await Promise.race([new Promise((r) => child.once("exit", r)), new Promise((r) => setTimeout(r, 5000))]); if (child.exitCode === null) child.kill("SIGKILL"); }
+function pack() { return { object_type: "email_evidence_pack", object_version: "1", status: "ready_for_summary", date: "2026-07-14", account: "a@test", window: "daily", scan_limit: 2, raw_count: 2, possibly_truncated: false, items: ["A", "B"].map((uid) => ({ uid, date: "2026-07-14", from: "sender@test", subject: uid, snippet: uid === "A" ? "SECRET-DESTROY-ME" : "B remains", evidence: [] })) }; }
+function runIngress(file, endpoint) { const r = spawnSync(python, [path.join(root, "outputs/email/evidence_ingress.py"), file, ledger, endpoint], { cwd: root, env, encoding: "utf8", timeout: 30000 }); assert.equal(r.status, 0, r.stderr); return JSON.parse(r.stdout); }
+function filesBelow(directory) { const result = []; for (const entry of fs.readdirSync(directory, { withFileTypes: true })) { const item = path.join(directory, entry.name); if (entry.isDirectory()) result.push(...filesBelow(item)); else if (entry.isFile()) result.push(item); } return result; }
+function assertStateRedacted() {
+  // 逐一检查所有状态文件；失败时保留具体文件名，不能以汇总字符串掩盖诊断。
+  for (const file of filesBelow(state)) assert.equal(fs.readFileSync(file).includes("SECRET-DESTROY-ME"), false, `redacted sentinel remains in ${file}`);
+  const models = path.join(state, "world-models"); const nodes = fs.readdirSync(models, { withFileTypes: true }).filter((entry) => entry.isDirectory()); assert.ok(nodes.length > 0, "world-models must contain published nodes");
+  for (const node of nodes) {
+    const nodeDir = path.join(models, node.name); const published = JSON.parse(fs.readFileSync(path.join(nodeDir, "published.json"), "utf8"));
+    assert.match(published.version, /^sha256:[0-9a-f]{64}$/, `invalid published version for ${node.name}`);
+    const expected = `sha256_${published.version.slice("sha256:".length)}.bin`; const versions = fs.readdirSync(path.join(nodeDir, "versions")).sort();
+    assert.deepEqual(versions, [expected], `versions for ${node.name} must retain only its published current bin`);
+  }
+}
+function assertRetentionAudit() {
+  const records = fs.readFileSync(retentionAudit, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(records.length, 1, "redaction creates one retention audit record"); assert.equal(records[0].action_id, "redaction-1");
+  assert.deepEqual(Object.keys(records[0]).sort(), ["action_id", "event_id", "node_ids", "purged_content_addresses", "receipt_ref", "target_id"], "retention audit must not carry a payload");
+  assert.equal(JSON.stringify(records).includes("SECRET-DESTROY-ME"), false, "retention audit must not retain the redacted payload");
+}
+(async () => {
+  assert.ok(process.env.OPENAI_API_KEY, "OPENAI_API_KEY is required"); assert.ok(fs.existsSync(python), `app venv missing: ${python}`);
+  fs.mkdirSync(path.join(project, "src"), { recursive: true });
+  for (const file of ["email-evidence-gateway.prose.md", "workbench-action-gateway.prose.md", "email-evidence-responsibility.prose.md"]) fs.copyFileSync(path.join(prose, "src", file), path.join(project, "src", file));
+  const daemonPort = await port(); daemon = spawn(process.execPath, [path.join(prose, "src/evidence-reactor-daemon.cjs"), "--contracts", path.join(project, "src"), "--state", state, "--ledger", ledger, "--delivery-mode", "file", "--delivery-outbox", path.join(temp, "outbox"), "--delivery-target", "fixture-file", "--port", String(daemonPort)], { cwd: project, env, stdio: "inherit" }); await ready(daemonPort);
+  const fixture = path.join(temp, "pack.json"); fs.writeFileSync(fixture, JSON.stringify(pack())); const ingress = runIngress(fixture, `http://127.0.0.1:${daemonPort}`); let via = ingress.reactor.via;
+  const entries = via.evidence_ledger.current_entries.filter((entry) => entry.kind === "email_item"); assert.equal(entries.length, 2); const [a, b] = entries;
+  const relation = { action_id: "relation-1", kind: "relation", from_id: a.entry_id, to_id: b.entry_id, relation_type: "refutes", registry_version: "1", actor: "podsum.local-owner", reason: "test", target_fingerprint: via.evidence_ledger.material_fingerprint };
+  const relationResponse = await request(daemonPort, "POST", "/trigger/workbench-action", relation); assert.equal(relationResponse.status, 200); const related = await request(daemonPort, "GET", "/via/email-evidence-pack"); assert.equal(related.status, 200); via = related.body; assert.equal(via.evidence_ledger.current_entries.find((entry) => entry.entry_id === b.entry_id).refuted, true); assert.ok(via.evidence_ledger.current_entries.find((entry) => entry.entry_id === a.entry_id));
+  const bytes = fs.readFileSync(ledger); for (const bad of [{ ...relation, action_id: "stale", target_fingerprint: "bad" }, { ...relation, action_id: "unknown", from_id: "evidence:missing", target_fingerprint: via.evidence_ledger.material_fingerprint }, { action_id: "unauthorized", kind: "redaction", target_id: a.entry_id, actor: "no", reason: "x", target_fingerprint: via.evidence_ledger.material_fingerprint }]) { assert.equal((await request(daemonPort, "POST", "/trigger/workbench-action", bad)).status, 400); assert.deepEqual(fs.readFileSync(ledger), bytes); }
+  const redaction = { action_id: "redaction-1", kind: "redaction", target_id: a.entry_id, actor: "podsum.local-owner", reason: "destroy", target_fingerprint: via.evidence_ledger.material_fingerprint }; const redacted = await request(daemonPort, "POST", "/trigger/workbench-action", redaction); assert.equal(redacted.status, 200); assert.equal(redacted.body.action.action_id, redaction.action_id); assert.equal(JSON.stringify(redacted.body).includes("SECRET-DESTROY-ME"), false, "action response must be safe");
+  const current = await request(daemonPort, "GET", "/via/email-evidence-pack"); assert.equal(current.status, 200); assert.equal(JSON.stringify(current.body).includes("SECRET-DESTROY-ME"), false, "current VIA must be safe"); assert.equal(current.body.evidence_ledger.history.length, 1);
+  const receipts = await request(daemonPort, "GET", "/receipts"); assert.equal(receipts.status, 200); assert.ok(receipts.body.receipts.some((r) => r.node === "workbench-action-gateway")); assert.equal(JSON.stringify(receipts.body).includes("SECRET-DESTROY-ME"), false, "receipts must be safe"); assertStateRedacted(); assertRetentionAudit();
+  await stop(daemon); daemon = undefined;
+  const restartPort = await port(); daemon = spawn(process.execPath, [path.join(prose, "src/evidence-reactor-daemon.cjs"), "--contracts", path.join(project, "src"), "--state", state, "--ledger", ledger, "--delivery-mode", "file", "--delivery-outbox", path.join(temp, "outbox"), "--delivery-target", "fixture-file", "--port", String(restartPort)], { cwd: project, env, stdio: "inherit" }); await ready(restartPort);
+  const restored = await request(restartPort, "GET", "/via/email-evidence-pack"); assert.equal(restored.status, 200); assert.equal(JSON.stringify(restored.body).includes("SECRET-DESTROY-ME"), false, "restarted VIA must be safe"); const status = await request(restartPort, "GET", "/status"); assert.equal(status.status, 200); assert.equal(status.body.chain.ok, true, "receipt chain must verify after restart");
+  const devtools = spawnSync(path.join(prose, "node_modules/.bin/reactor-devtools"), [state, "--describe", "--json"], { cwd: project, env, encoding: "utf8", timeout: 30000 }); assert.equal(devtools.status, 0, devtools.stderr); assert.equal(JSON.parse(devtools.stdout).chainVerify.ok, true);
+  const wbPort = await port(); workbench = spawn(python, [path.join(root, "outputs/podsum_email_workbench.py"), "--root", path.join(temp, "downloads"), "--date", "2026-07-14", "--port", String(wbPort), "--reactor-endpoint", `http://127.0.0.1:${restartPort}`], { cwd: root, env, stdio: "inherit" }); for (let i = 0; i < 120; i += 1) { try { if ((await request(wbPort, "GET", "/api/context")).status === 200) break; } catch {} await new Promise((r) => setTimeout(r, 100)); }
+  const wb = await request(wbPort, "GET", "/api/evidence-pack"); assert.equal(wb.status, 200); assert.equal(JSON.stringify(wb.body).includes("SECRET-DESTROY-ME"), false, "Workbench must be safe"); console.log("#28 live relations black box: relation, rejection, redaction, retention, Workbench and safe receipts verified");
+})().finally(async () => { await stop(workbench); await stop(daemon); fs.rmSync(temp, { recursive: true, force: true }); });

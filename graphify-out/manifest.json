@@ -1,0 +1,342 @@
+{
+  "outputs/email/__init__.py": {
+    "mtime": 1783253708.929342,
+    "ast_hash": "ca55413b3e32bc79a02a8404fdddf1e5",
+    "semantic_hash": "ca55413b3e32bc79a02a8404fdddf1e5"
+  },
+  "outputs/email/brief_agent.py": {
+    "mtime": 1783336413.1055112,
+    "ast_hash": "28ae018768a0900d283cc4f4d93455d5",
+    "semantic_hash": "28ae018768a0900d283cc4f4d93455d5"
+  },
+  "outputs/email/evidence_agent.py": {
+    "mtime": 1783265052.0253036,
+    "ast_hash": "42ee007db3bc9a039ae82fe879cecd48",
+    "semantic_hash": "42ee007db3bc9a039ae82fe879cecd48"
+  },
+  "outputs/email/graph.py": {
+    "mtime": 1783265055.4262805,
+    "ast_hash": "2fbf35dbbf1b3a5e29ccb43e0cbea5c9",
+    "semantic_hash": "2fbf35dbbf1b3a5e29ccb43e0cbea5c9"
+  },
+  "outputs/email/io.py": {
+    "mtime": 1783253716.2320228,
+    "ast_hash": "3e95ed9935c70b462b516d1af1fea8fa",
+    "semantic_hash": "3e95ed9935c70b462b516d1af1fea8fa"
+  },
+  "outputs/email/need_store.py": {
+    "mtime": 1783254245.3217287,
+    "ast_hash": "b251a64e32dfdfbc1373c51ae9e51f23",
+    "semantic_hash": "b251a64e32dfdfbc1373c51ae9e51f23"
+  },
+  "outputs/email/object_harness.py": {
+    "mtime": 1783263040.009107,
+    "ast_hash": "db90cc15221c65bfceebf1987cbd2f92",
+    "semantic_hash": "db90cc15221c65bfceebf1987cbd2f92"
+  },
+  "outputs/email/providers.py": {
+    "mtime": 1783254449.3520176,
+    "ast_hash": "3e3e65c3ecaeed22e6f937574960a742",
+    "semantic_hash": "3e3e65c3ecaeed22e6f937574960a742"
+  },
+  "outputs/email/schemas.py": {
+    "mtime": 1783265062.6455402,
+    "ast_hash": "7fe7730e68869752f535ecdfc226cf47",
+    "semantic_hash": "7fe7730e68869752f535ecdfc226cf47"
+  },
+  "outputs/email_mailparser_cleaner.js": {
+    "mtime": 1783334886.8796728,
+    "ast_hash": "d87e40ce0d12a7aec108d1f242f8c20d",
+    "semantic_hash": "d87e40ce0d12a7aec108d1f242f8c20d"
+  },
+  "outputs/feeds.json": {
+    "mtime": 1782305378.888602,
+    "ast_hash": "025f084d1eea2d4958aef9798cf64648",
+    "semantic_hash": "025f084d1eea2d4958aef9798cf64648"
+  },
+  "outputs/package.json": {
+    "mtime": 1783334042.9482067,
+    "ast_hash": "e68dc2d6e6b48a22255eac5fb7025564",
+    "semantic_hash": "e68dc2d6e6b48a22255eac5fb7025564"
+  },
+  "outputs/podcast_downloader.py": {
+    "mtime": 1782305378.889223,
+    "ast_hash": "9c839a0511fd898943a36f1ad08edbd7",
+    "semantic_hash": "9c839a0511fd898943a36f1ad08edbd7"
+  },
+  "outputs/podsum.py": {
+    "mtime": 1783395892.0208788,
+    "ast_hash": "922434405ad55742b3275f49afd2d8ef",
+    "semantic_hash": "922434405ad55742b3275f49afd2d8ef"
+  },
+  "outputs/podsum_core/__init__.py": {
+    "mtime": 1782359426.5526633,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "outputs/podsum_core/delivery/__init__.py": {
+    "mtime": 1783395826.2908785,
+    "ast_hash": "eafc2f1e8ff1030f5f99b9a9d60789e6",
+    "semantic_hash": "eafc2f1e8ff1030f5f99b9a9d60789e6"
+  },
+  "outputs/podsum_core/delivery/hermes_adapter.py": {
+    "mtime": 1782366199.522998,
+    "ast_hash": "f61fba4917748b20ae6244f2052890e3",
+    "semantic_hash": "f61fba4917748b20ae6244f2052890e3"
+  },
+  "outputs/podsum_core/delivery/smtp_adapter.py": {
+    "mtime": 1783397642.343386,
+    "ast_hash": "120adfa1abf601839f9bccc500dc39f9",
+    "semantic_hash": "120adfa1abf601839f9bccc500dc39f9"
+  },
+  "outputs/podsum_core/epub_converter/__init__.py": {
+    "mtime": 1782359426.5552435,
+    "ast_hash": "8e0e6de019da234333807bdb1a16a92d",
+    "semantic_hash": "8e0e6de019da234333807bdb1a16a92d"
+  },
+  "outputs/podsum_core/epub_converter/epub_generator.py": {
+    "mtime": 1782360117.2153194,
+    "ast_hash": "7895eef4fd05ba3c0e2703cd9a5c59f5",
+    "semantic_hash": "7895eef4fd05ba3c0e2703cd9a5c59f5"
+  },
+  "outputs/podsum_core/epub_converter/markdown_processor.py": {
+    "mtime": 1782359426.546606,
+    "ast_hash": "8746ae5306eaf0d809752635d14ca7e7",
+    "semantic_hash": "8746ae5306eaf0d809752635d14ca7e7"
+  },
+  "outputs/podsum_core/epub_converter/preprocess.py": {
+    "mtime": 1782359426.5494409,
+    "ast_hash": "1f6c0d9b8b9a02276100b804d7980d03",
+    "semantic_hash": "1f6c0d9b8b9a02276100b804d7980d03"
+  },
+  "outputs/podsum_email_fixture_tool.py": {
+    "mtime": 1783247817.9131467,
+    "ast_hash": "e3902178074a233d8e5994a1d2a42b10",
+    "semantic_hash": "e3902178074a233d8e5994a1d2a42b10"
+  },
+  "outputs/podsum_email_summary.py": {
+    "mtime": 1783397668.5075305,
+    "ast_hash": "b7f6318c5596324ac233ff25b6c73c2b",
+    "semantic_hash": "b7f6318c5596324ac233ff25b6c73c2b"
+  },
+  "outputs/podsum_email_workbench.py": {
+    "mtime": 1783321533.6724248,
+    "ast_hash": "45dffb2a95c83299279136335c0e6b5c",
+    "semantic_hash": "45dffb2a95c83299279136335c0e6b5c"
+  },
+  "outputs/podsum_runtime.py": {
+    "mtime": 1783257502.5511146,
+    "ast_hash": "3d8d3130a7c2b013e74953611c1b42c2",
+    "semantic_hash": "3d8d3130a7c2b013e74953611c1b42c2"
+  },
+  "outputs/podsum_send_to_feishu.py": {
+    "mtime": 1782366301.3837783,
+    "ast_hash": "8c11130de05b7d9f336f6076d46cd20b",
+    "semantic_hash": "8c11130de05b7d9f336f6076d46cd20b"
+  },
+  "outputs/transcript_cleaner/__init__.py": {
+    "mtime": 1782312938.9150114,
+    "ast_hash": "11a05a6dc89c23a29440280580f90885",
+    "semantic_hash": "11a05a6dc89c23a29440280580f90885"
+  },
+  "outputs/transcript_cleaner/__main__.py": {
+    "mtime": 1782305378.8930027,
+    "ast_hash": "0050521ccf0ccccfc5a9bbcd1c004b4e",
+    "semantic_hash": "0050521ccf0ccccfc5a9bbcd1c004b4e"
+  },
+  "outputs/transcript_cleaner/cleaner.py": {
+    "mtime": 1782387586.4464583,
+    "ast_hash": "9819018e41b9e24aaeb4398ff9b098f0",
+    "semantic_hash": "9819018e41b9e24aaeb4398ff9b098f0"
+  },
+  "outputs/transcript_cleaner/cli.py": {
+    "mtime": 1782306973.598742,
+    "ast_hash": "4d68b9579b655ac3783c3e365cabed5d",
+    "semantic_hash": "4d68b9579b655ac3783c3e365cabed5d"
+  },
+  "outputs/transcript_cleaner/epub.py": {
+    "mtime": 1782359435.820968,
+    "ast_hash": "4d1031e1320c2b92ea11c7bc699d9cae",
+    "semantic_hash": "4d1031e1320c2b92ea11c7bc699d9cae"
+  },
+  "scripts/install-hermes-skills.sh": {
+    "mtime": 1782389691.5582383,
+    "ast_hash": "b4125d687e6dff61417ff7c58e5baddc",
+    "semantic_hash": "b4125d687e6dff61417ff7c58e5baddc"
+  },
+  "skills/media/make-markdown-readable/scripts/clean_markdown.py": {
+    "mtime": 1782390337.0719528,
+    "ast_hash": "695d9345941634c7bb927c108bfe2b1d",
+    "semantic_hash": "695d9345941634c7bb927c108bfe2b1d"
+  },
+  "skills/media/make-markdown-readable/scripts/export_epub.py": {
+    "mtime": 1782389246.473022,
+    "ast_hash": "8ffa9dccde0ada717c095936f86ac4ca",
+    "semantic_hash": "8ffa9dccde0ada717c095936f86ac4ca"
+  },
+  "skills/media/make-markdown-readable/scripts/generate_epub.py": {
+    "mtime": 1782389674.5154324,
+    "ast_hash": "bcec355aa5478c8ac35867b6287259b5",
+    "semantic_hash": "bcec355aa5478c8ac35867b6287259b5"
+  },
+  "skills/media/make-markdown-readable/scripts/run_transcript_cleaner.py": {
+    "mtime": 1782389669.8344882,
+    "ast_hash": "724526eabd07ea341de93e08c4c2853d",
+    "semantic_hash": "724526eabd07ea341de93e08c4c2853d"
+  },
+  "skills/social-media/hermes-feishu-file-send/scripts/safe_file_for_send.py": {
+    "mtime": 1782316175.660343,
+    "ast_hash": "2ebbfd03eb0f5d6a9f1d30f14d66b0f2",
+    "semantic_hash": "2ebbfd03eb0f5d6a9f1d30f14d66b0f2"
+  },
+  "skills/social-media/hermes-feishu-file-send/scripts/send_feishu_file.py": {
+    "mtime": 1782316175.6604478,
+    "ast_hash": "098076967569ccfa5d2943017303b27f",
+    "semantic_hash": "098076967569ccfa5d2943017303b27f"
+  },
+  "tests/fixtures/email_summary_scans/email-scan-empty.json": {
+    "mtime": 1783247817.914918,
+    "ast_hash": "a32262e3c47f680b8edc8ed9eb42fb61",
+    "semantic_hash": "a32262e3c47f680b8edc8ed9eb42fb61"
+  },
+  "tests/fixtures/email_summary_scans/email-scan-truncated.json": {
+    "mtime": 1783247817.914976,
+    "ast_hash": "6b3586f5395d513a1e47315a79b38ef2",
+    "semantic_hash": "6b3586f5395d513a1e47315a79b38ef2"
+  },
+  "tests/test_podsum_cli.py": {
+    "mtime": 1783397831.6700926,
+    "ast_hash": "625bf06297023595c3101d1da4a14610",
+    "semantic_hash": "625bf06297023595c3101d1da4a14610"
+  },
+  "tests/test_transcript_cleaner.py": {
+    "mtime": 1782385656.647145,
+    "ast_hash": "482459870d1b94d76005ff220a7285c0",
+    "semantic_hash": "482459870d1b94d76005ff220a7285c0"
+  },
+  "AGENTS.md": {
+    "mtime": 1783334655.1892104,
+    "ast_hash": "7110dcb960e3550f9b36ce30f8af8818",
+    "semantic_hash": "7110dcb960e3550f9b36ce30f8af8818"
+  },
+  "CONTEXT.md": {
+    "mtime": 1783413701.0218494,
+    "ast_hash": "2df7877cd706488f24285a03e637b915",
+    "semantic_hash": "2df7877cd706488f24285a03e637b915"
+  },
+  "README.md": {
+    "mtime": 1783257133.4723322,
+    "ast_hash": "8e1648267fe8c3e88a0fc27d45466380",
+    "semantic_hash": "8e1648267fe8c3e88a0fc27d45466380"
+  },
+  "TODO.md": {
+    "mtime": 1783425628.5894318,
+    "ast_hash": "b6e545e26ca34f130f926b659b0cd54c",
+    "semantic_hash": "b6e545e26ca34f130f926b659b0cd54c"
+  },
+  "docs/agents/domain.md": {
+    "mtime": 1783248089.8075237,
+    "ast_hash": "35089ed6a70a657c91fd100ade31b642",
+    "semantic_hash": "35089ed6a70a657c91fd100ade31b642"
+  },
+  "docs/agents/issue-tracker.md": {
+    "mtime": 1783248089.8079967,
+    "ast_hash": "9a1c8331578845eba5859f0886468fd6",
+    "semantic_hash": "9a1c8331578845eba5859f0886468fd6"
+  },
+  "docs/agents/triage-labels.md": {
+    "mtime": 1783248089.808632,
+    "ast_hash": "22add54cb98451c55b20e6b7992d4a85",
+    "semantic_hash": "22add54cb98451c55b20e6b7992d4a85"
+  },
+  "docs/research/html-email-content-extraction.md": {
+    "mtime": 1783331326.6296277,
+    "ast_hash": "70a8a93afeb438d1d2722c98a2b4f02c",
+    "semantic_hash": "70a8a93afeb438d1d2722c98a2b4f02c"
+  },
+  "mse435_transcripts/course_md/MS&E435_complete_course_transcript.md": {
+    "mtime": 1782308582.283814,
+    "ast_hash": "dbba504a58d959cdb64a911305e7edb3",
+    "semantic_hash": "dbba504a58d959cdb64a911305e7edb3"
+  },
+  "outputs/README.md": {
+    "mtime": 1783397706.9366384,
+    "ast_hash": "5d751df3ae84fab76302d732dc55d00f",
+    "semantic_hash": "5d751df3ae84fab76302d732dc55d00f"
+  },
+  "outputs/email_evidence_preprocess_prompt.md": {
+    "mtime": 1783319083.6020453,
+    "ast_hash": "33386666d6c0c13d06ee8ca39c7bd1f6",
+    "semantic_hash": "33386666d6c0c13d06ee8ca39c7bd1f6"
+  },
+  "outputs/email_link_policy.md": {
+    "mtime": 1783247817.912601,
+    "ast_hash": "ddd7aec3b9353a70cd7f45eda84b40ed",
+    "semantic_hash": "ddd7aec3b9353a70cd7f45eda84b40ed"
+  },
+  "outputs/email_summary_prompt.md": {
+    "mtime": 1783336928.1384299,
+    "ast_hash": "ca17d29e9858a86da5215f8f3a9faba1",
+    "semantic_hash": "ca17d29e9858a86da5215f8f3a9faba1"
+  },
+  "outputs/hermes_interpretation_prompt.md": {
+    "mtime": 1782305378.8889031,
+    "ast_hash": "8c2f6416e425853694a7f6e17ec8b8bc",
+    "semantic_hash": "8c2f6416e425853694a7f6e17ec8b8bc"
+  },
+  "outputs/topic.md": {
+    "mtime": 1783247817.9137049,
+    "ast_hash": "6fdfba866f39bac4587e362db95ab199",
+    "semantic_hash": "6fdfba866f39bac4587e362db95ab199"
+  },
+  "outputs/transcript_cleaner/PRD.md": {
+    "mtime": 1782305378.8903809,
+    "ast_hash": "4be9cd7544e3567190b35442e1115251",
+    "semantic_hash": "4be9cd7544e3567190b35442e1115251"
+  },
+  "outputs/transcript_cleaner/README.md": {
+    "mtime": 1782389701.931101,
+    "ast_hash": "3b3f99fa66be8e7eddc6a64ffe1be2c9",
+    "semantic_hash": "3b3f99fa66be8e7eddc6a64ffe1be2c9"
+  },
+  "plans/podsum-email-summary-master-plan.md": {
+    "mtime": 1783257115.96744,
+    "ast_hash": "5175b32d7f39daa3b603cdfde61cb7f7",
+    "semantic_hash": "5175b32d7f39daa3b603cdfde61cb7f7"
+  },
+  "plans/podsum-email-summary-refactor-plan.md": {
+    "mtime": 1783257115.9678533,
+    "ast_hash": "0ef0652821e4cfcc0f1d01f130868194",
+    "semantic_hash": "0ef0652821e4cfcc0f1d01f130868194"
+  },
+  "plans/podsum-email-two-agent-prd.md": {
+    "mtime": 1783252092.3545532,
+    "ast_hash": "34329cbc86be94c4fe2d28d701830f5b",
+    "semantic_hash": "34329cbc86be94c4fe2d28d701830f5b"
+  },
+  "plans/podsum-email-workbench-gui-spec.md": {
+    "mtime": 1783257115.9676435,
+    "ast_hash": "643d9564b10b24fe38b699b28eefdba8",
+    "semantic_hash": "643d9564b10b24fe38b699b28eefdba8"
+  },
+  "skills/media/make-markdown-readable/SKILL.md": {
+    "mtime": 1782391063.2005322,
+    "ast_hash": "c153079339e244c10701082cba81af93",
+    "semantic_hash": "c153079339e244c10701082cba81af93"
+  },
+  "skills/social-media/hermes-feishu-file-send/SKILL.md": {
+    "mtime": 1782316175.6602154,
+    "ast_hash": "f22a239b2cb1b26aef72b38442ada589",
+    "semantic_hash": "f22a239b2cb1b26aef72b38442ada589"
+  },
+  "spec-inbox.md": {
+    "mtime": 1783413673.2883303,
+    "ast_hash": "16625e45107692192f5eebb7e9faeb56",
+    "semantic_hash": "16625e45107692192f5eebb7e9faeb56"
+  },
+  "spec.md": {
+    "mtime": 1783414110.7207599,
+    "ast_hash": "757e8b51ac3c52243be6ed085d8e6350",
+    "semantic_hash": "757e8b51ac3c52243be6ed085d8e6350"
+  }
+}

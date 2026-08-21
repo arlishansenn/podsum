@@ -1,0 +1,67 @@
+{
+  "default_material": true,
+  "facets": [
+    {
+      "facet": "incoming",
+      "paths": [
+        "event_id",
+        "message"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "material": true,
+      "path": "event_id",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "message",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": false,
+      "path": "derived_markdown"
+    },
+    {
+      "material": false,
+      "path": "summary"
+    },
+    {
+      "material": false,
+      "path": "summaries"
+    },
+    {
+      "material": false,
+      "path": "timestamp"
+    },
+    {
+      "material": false,
+      "path": "fetched_at"
+    },
+    {
+      "material": false,
+      "path": "request_id"
+    },
+    {
+      "material": false,
+      "path": "connector_cursor"
+    },
+    {
+      "material": false,
+      "path": "receipt_id"
+    },
+    {
+      "material": false,
+      "path": "ingress_boundary_fingerprint"
+    }
+  ],
+  "node": "email-ingress-gateway"
+}

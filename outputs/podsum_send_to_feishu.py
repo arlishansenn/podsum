@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """经 Hermes 将生成的 Podsum 报告 EPUB 投递到配置的目标（默认 Discord）。
 
-注：文件名 podsum_send_to_feishu.py 为历史原因保留（launchd plist 引用），
-实际投递目标由 --target 决定，传输统一由 podsum_core.delivery 的 Hermes adapter 完成。
+注：文件名 podsum_send_to_feishu.py 为历史原因保留，实际投递目标由 --target
+决定，传输统一由 podsum_core.delivery 的 Hermes adapter 完成。
 """
 
 from __future__ import annotations
@@ -16,16 +16,17 @@ import time
 from pathlib import Path
 from typing import Any
 
+import podsum_runtime
 from podsum_core.delivery import run_hermes_prompt, send_hermes_file
 from podsum_core.epub_converter import create_epub_from_markdown
 
 
 DEFAULT_TRANSCRIPTS_ROOT = Path.home() / "Podcasts/AutoDownloads"
-DEFAULT_STATE_FILE = Path.home() / "Library/Application Support/Podsum/feishu_sent.json"
+DEFAULT_STATE_FILE = podsum_runtime.podsum_home() / "feishu_sent.json"
 DEFAULT_MEMORY_FILE = Path.home() / ".hermes/memories/MEMORY.md"
 DEFAULT_INTERPRETATION_PROMPT = Path(__file__).with_name("hermes_interpretation_prompt.md")
 DEFAULT_INTERPRETATION_RULES = Path(__file__).with_name("interpretation_rules.md")
-DEFAULT_TARGET = "discord:1518857496788467832"
+DEFAULT_TARGET = ""
 DEFAULT_HERMES = Path.home() / ".local/bin/hermes"
 DEFAULT_AUDIO_RETENTION_DAYS = 14
 DEFAULT_TRANSCRIPT_RETENTION_DAYS = 90
@@ -422,7 +423,10 @@ def send_file(args: argparse.Namespace, path: Path, count: int, source_md: Path 
         log(f"would send: {path}")
         return
 
-    output = send_hermes_file(str(args.hermes), args.target, subject, message)
+    target = podsum_runtime.resolve_target(
+        args.target, podsum_runtime.load_env_file(podsum_runtime.default_env_file()), podsum_runtime.default_env_file()
+    )
+    output = send_hermes_file(str(args.hermes), target, subject, message)
     log(output)
 
 

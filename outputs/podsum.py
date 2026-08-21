@@ -16,10 +16,11 @@ from typing import Any
 import podcast_downloader as downloader
 import podsum_email_summary as email_summary
 import podsum_email_workbench as email_workbench
+import podsum_runtime
 import podsum_send_to_feishu as sender
 
 
-DEFAULT_STATE_FILE = Path.home() / "Library/Application Support/Podsum/state.json"
+DEFAULT_STATE_FILE = podsum_runtime.podsum_home() / "state.json"
 DEFAULT_OUTPUT_DIR = Path.home() / "Podcasts/AutoDownloads"
 DEFAULT_FEEDS_FILE = Path(__file__).with_name("feeds.json")
 
@@ -264,14 +265,15 @@ def run_once(args: argparse.Namespace) -> int:
     else:
         sent_count = send_ready(args, state)
         log(f"Sent {sent_count} episode(s).")
+    # cleanup 是本次运行已完成工作的收尾，不能被下游可选步骤的失败挡住：
+    # 邮件摘要一失败就提前返回，会让当天所有 retention 策略静默停摆。
+    email_result = 0
     if getattr(args, "email_summary", False):
-        result = run_email_summary(email_summary_args_from_podsum(args))
-        if result != 0:
-            return result
+        email_result = run_email_summary(email_summary_args_from_podsum(args))
     else:
         log("Email summary skipped.")
     cleanup_if_requested(args, state)
-    return 0
+    return email_result
 
 
 def download(args: argparse.Namespace) -> int:
@@ -714,7 +716,7 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_parser.add_argument(
         "--old-sent-state",
         type=Path,
-        default=Path.home() / "Library/Application Support/Podsum/feishu_sent.json",
+        default=podsum_runtime.podsum_home() / "feishu_sent.json",
     )
     migrate_parser.set_defaults(func=migrate_state)
 

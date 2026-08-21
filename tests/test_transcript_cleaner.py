@@ -432,7 +432,12 @@ class TranscriptCleanerTest(unittest.TestCase):
             with zipfile.ZipFile(epub) as archive:
                 self.assertEqual(archive.namelist()[0], "mimetype")
                 self.assertEqual(archive.read("mimetype"), b"application/epub+zip")
-                self.assertIn("OEBPS/content.xhtml", archive.namelist())
+                # OEBPS/content.xhtml 是 ebooklib 缺席时 _write_minimal_epub 的降级布局。
+                # 断言真实布局，这条测试才会在依赖漏装、EPUB 悄悄降级时变红。
+                names = archive.namelist()
+                self.assertIn("EPUB/content.opf", names)
+                self.assertIn("EPUB/nav.xhtml", names)
+                self.assertNotIn("OEBPS/content.xhtml", names)
 
 
     def test_collapses_english_intra_sentence_fragment_repeat(self) -> None:

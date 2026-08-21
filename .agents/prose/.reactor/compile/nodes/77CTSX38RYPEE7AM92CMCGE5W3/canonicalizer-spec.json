@@ -1,0 +1,74 @@
+{
+  "default_material": true,
+  "facets": [],
+  "fields": [
+    {
+      "material": true,
+      "path": "snapshot_event_id",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "snapshot_message",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "number": {
+        "quantum": null
+      },
+      "path": "event_updates"
+    },
+    {
+      "material": false,
+      "path": "derived_markdown"
+    },
+    {
+      "material": false,
+      "path": "markdown"
+    },
+    {
+      "material": false,
+      "path": "timestamps"
+    },
+    {
+      "material": false,
+      "path": "timestamp"
+    },
+    {
+      "material": false,
+      "path": "fetched_at"
+    },
+    {
+      "material": false,
+      "path": "request_id"
+    },
+    {
+      "material": false,
+      "path": "request_ids"
+    },
+    {
+      "material": false,
+      "path": "connector_cursor"
+    },
+    {
+      "material": false,
+      "path": "connector_cursors"
+    },
+    {
+      "material": false,
+      "path": "receipt_id"
+    },
+    {
+      "material": false,
+      "path": "receipt_ids"
+    }
+  ],
+  "node": "77CTSX38RYPEE7AM92CMCGE5W3"
+}

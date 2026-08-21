@@ -1,0 +1,28 @@
+{
+  "default_material": true,
+  "facets": [
+    {
+      "facet": "evidence_pack",
+      "paths": [
+        "evidence_pack.commit",
+        "evidence_pack.projection",
+        "evidence_pack.current_pack"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "material": true,
+      "path": "evidence_pack.commit"
+    },
+    {
+      "material": true,
+      "path": "evidence_pack.projection"
+    },
+    {
+      "material": true,
+      "path": "evidence_pack.current_pack"
+    }
+  ],
+  "node": "email-evidence-gateway"
+}

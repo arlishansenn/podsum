@@ -1,0 +1,254 @@
+{
+  "default_material": true,
+  "facets": [
+    {
+      "facet": "email_intel_brief_via",
+      "paths": [
+        "object_type",
+        "version",
+        "brief_id",
+        "status",
+        "source.material_fingerprint",
+        "source.revision",
+        "title",
+        "summary",
+        "claims",
+        "coverage.available_entry_ids",
+        "coverage.cited_entry_ids",
+        "coverage.uncited_entry_ids",
+        "gaps",
+        "decision",
+        "delivery"
+      ]
+    },
+    {
+      "facet": "email_intel_brief_reviewable",
+      "paths": [
+        "object_type",
+        "version",
+        "brief_id",
+        "status",
+        "source.material_fingerprint",
+        "source.revision",
+        "title",
+        "summary",
+        "claims",
+        "coverage.available_entry_ids",
+        "coverage.cited_entry_ids",
+        "coverage.uncited_entry_ids",
+        "gaps",
+        "decision"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "material": true,
+      "path": "object_type",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "number": {
+        "quantum": null
+      },
+      "path": "version"
+    },
+    {
+      "material": true,
+      "path": "brief_id",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "status",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "source.material_fingerprint",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "number": {
+        "quantum": null
+      },
+      "path": "source.revision"
+    },
+    {
+      "material": true,
+      "path": "title",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "summary",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "collection": "set",
+      "material": true,
+      "path": "claims"
+    },
+    {
+      "material": true,
+      "path": "claims[].claim_id",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "claims[].text",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "collection": "set",
+      "material": true,
+      "path": "claims[].evidence_entry_ids"
+    },
+    {
+      "collection": "set",
+      "material": true,
+      "path": "coverage.available_entry_ids"
+    },
+    {
+      "collection": "set",
+      "material": true,
+      "path": "coverage.cited_entry_ids"
+    },
+    {
+      "collection": "set",
+      "material": true,
+      "path": "coverage.uncited_entry_ids"
+    },
+    {
+      "collection": "ordered",
+      "material": true,
+      "path": "gaps"
+    },
+    {
+      "material": true,
+      "path": "decision"
+    },
+    {
+      "material": true,
+      "path": "decision.last_action_id",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "decision.kind",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "decision.actor",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "decision.feedback",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "delivery"
+    },
+    {
+      "material": true,
+      "path": "delivery.status",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "delivery.delivery_id",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "number": {
+        "quantum": null
+      },
+      "path": "delivery.attempt"
+    },
+    {
+      "material": true,
+      "path": "delivery.target",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "delivery.last_action_id",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "delivery.outcome"
+    },
+    {
+      "material": true,
+      "path": "delivery.error",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "delivery.receipt_ref",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    }
+  ],
+  "node": "7R6QX8GZ3EW3S7PVJ9KQ6E2D4M"
+}

@@ -12,7 +12,7 @@ import urllib.request
 import unittest
 from email.message import EmailMessage
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -2255,6 +2255,8 @@ class PodsumCliTest(unittest.TestCase):
 
             result = run_podsum(
                 "send",
+                "--target",
+                "discord:test-target",
                 "--state",
                 str(state),
                 "--output",
@@ -2274,7 +2276,7 @@ class PodsumCliTest(unittest.TestCase):
             self.assertTrue(Path(episode["bundle_path"]).exists())
             self.assertTrue(Path(episode["epub_path"]).exists())
             send_args = hermes_args.read_text(encoding="utf-8").splitlines()
-            self.assertEqual(send_args[send_args.index("--to") + 1], "discord:1518857496788467832")
+            self.assertEqual(send_args[send_args.index("--to") + 1], "discord:test-target")
 
     def test_failed_send_is_retried_from_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2317,6 +2319,8 @@ class PodsumCliTest(unittest.TestCase):
             hermes.chmod(0o755)
             common_args = [
                 "send",
+                "--target",
+                "discord:test-target",
                 "--state",
                 str(state),
                 "--output",
@@ -3180,6 +3184,8 @@ class PodsumCliTest(unittest.TestCase):
 
             result = run_podsum(
                 "email-summary",
+                "--target",
+                "discord:test-target",
                 "--scan-file",
                 str(scan_file),
                 "--output",
@@ -3756,6 +3762,168 @@ class PodsumCliTest(unittest.TestCase):
                 sender.build_bundle, podsum.log = real_build_bundle, real_log
 
             self.assertEqual(seen["interpretation_rules"], rules)
+
+    def test_run_once_still_cleans_up_when_email_summary_fails(self) -> None:
+        """邮件摘要失败不该吃掉 cleanup：播客链路已经跑完，保留策略必须照常执行。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "state.json"
+            state_path.write_text(json.dumps({"episodes": {}, "feeds": {}}), encoding="utf-8")
+            args = argparse.Namespace(
+                state=state_path,
+                skip_download=True,
+                skip_transcribe=True,
+                skip_send=True,
+                email_summary=True,
+                cleanup=True,
+            )
+            calls = []
+
+            real_email, real_cleanup, real_log, real_from_podsum = (
+                podsum.run_email_summary,
+                podsum.cleanup_if_requested,
+                podsum.log,
+                podsum.email_summary_args_from_podsum,
+            )
+            podsum.run_email_summary = lambda _args: 1
+            podsum.email_summary_args_from_podsum = lambda _args: _args
+            podsum.cleanup_if_requested = lambda *_: calls.append("cleanup")
+            podsum.log = lambda message: None
+            try:
+                result = podsum.run_once(args)
+            finally:
+                (
+                    podsum.run_email_summary,
+                    podsum.cleanup_if_requested,
+                    podsum.log,
+                    podsum.email_summary_args_from_podsum,
+                ) = (real_email, real_cleanup, real_log, real_from_podsum)
+
+            self.assertEqual(calls, ["cleanup"])
+            self.assertNotEqual(result, 0)
+
+    def test_resolve_target_prefers_cli_then_env_then_env_file(self) -> None:
+        """投递目标的优先级链：CLI > 进程环境变量 > .env 文件。"""
+        env_file = {"PODSUM_TARGET": "discord:from-file"}
+        env_path = Path("/nowhere/.env")
+
+        self.assertEqual(
+            podsum_runtime.resolve_target("discord:from-cli", env_file, env_path),
+            "discord:from-cli",
+        )
+
+        real = os.environ.get("PODSUM_TARGET")
+        os.environ["PODSUM_TARGET"] = "discord:from-env"
+        try:
+            self.assertEqual(
+                podsum_runtime.resolve_target("", env_file, env_path),
+                "discord:from-env",
+            )
+            self.assertEqual(
+                podsum_runtime.resolve_target("discord:from-cli", env_file, env_path),
+                "discord:from-cli",
+            )
+        finally:
+            if real is None:
+                del os.environ["PODSUM_TARGET"]
+            else:
+                os.environ["PODSUM_TARGET"] = real
+
+        self.assertEqual(
+            podsum_runtime.resolve_target("", env_file, env_path),
+            "discord:from-file",
+        )
+
+    def test_resolve_target_fails_loudly_when_unconfigured(self) -> None:
+        """未配置投递目标必须报错，而不是回落到某个写死的默认频道。"""
+        real = os.environ.pop("PODSUM_TARGET", None)
+        try:
+            with self.assertRaises(RuntimeError) as caught:
+                podsum_runtime.resolve_target("", {}, Path("/nowhere/.env"))
+        finally:
+            if real is not None:
+                os.environ["PODSUM_TARGET"] = real
+        message = str(caught.exception)
+        self.assertIn("PODSUM_TARGET", message)
+        self.assertIn("/nowhere/.env", message)
+
+    def test_target_cli_defaults_are_empty_on_every_entrypoint(self) -> None:
+        """三个 entrypoint 的 --target 默认值都必须为空，否则 config 那一档永远读不到。"""
+        def target_defaults(parser: argparse.ArgumentParser) -> list[Any]:
+            found = [a.default for a in parser._actions if "--target" in a.option_strings]
+            for action in parser._actions:
+                for sub in getattr(action, "choices", {}).values() if isinstance(getattr(action, "choices", None), dict) else []:
+                    found.extend(target_defaults(sub))
+            return found
+
+        for parser in (podsum.build_parser(), sender.build_parser(), email_summary.build_parser()):
+            defaults = target_defaults(parser)
+            self.assertTrue(defaults, "entrypoint is missing --target")
+            for default in defaults:
+                self.assertEqual(default, "")
+
+    def test_runtime_dependencies_are_installed_and_epub_is_not_degraded(self) -> None:
+        """冒烟断言：runtime 组的依赖真的可用，且 EPUB 没有走降级实现。
+
+        不做「扫 import 和 manifest 比对」的守卫测试：代码里的第三方 import 全部
+        包在 try/except 里，漏装不报错而是静默降级，比对清单测的是错的对象；而且
+        import 名与发行名多数对不上，outputs/email 又和 stdlib email 同名。
+        直接测真正关心的那个属性最短也最准。
+        """
+        import tomllib
+
+        declared = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertIn("runtime", declared["dependency-groups"])
+
+        for module in ("langgraph", "langchain_core", "ebooklib", "pygments"):
+            with self.subTest(module=module):
+                __import__(module)
+
+        from podsum_core.epub_converter import epub_generator
+
+        self.assertIsNotNone(
+            epub_generator.epub,
+            "ebooklib 未装：EPUB 会静默走 _write_minimal_epub 降级路径。跑 pip install --group runtime",
+        )
+
+    def test_deployment_root_defaults_follow_podsum_home(self) -> None:
+        """部署根只能有一处解析。各模块各写死一份，PODSUM_HOME 就会装出半残部署：
+        装在 A、却从 B 读配置往 B 写状态，而且零报错。
+
+        必须在子进程里验证：这些默认值是 import 期算出来的模块常量。
+        """
+        probe = textwrap.dedent(
+            """
+            import json, sys
+            sys.path.insert(0, sys.argv[1])
+            import podsum, podsum_runtime
+            import podsum_email_summary as email_summary
+            import podsum_send_to_feishu as sender
+            print(json.dumps({
+                "home": str(podsum_runtime.podsum_home()),
+                "podsum_state": str(podsum.DEFAULT_STATE_FILE),
+                "email_state": str(email_summary.DEFAULT_STATE_FILE),
+                "email_env": str(email_summary.DEFAULT_ENV_FILE),
+                "sender_state": str(sender.DEFAULT_STATE_FILE),
+            }))
+            """
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "elsewhere"
+            env = dict(os.environ, PODSUM_HOME=str(home))
+            result = subprocess.run(
+                [sys.executable, "-c", probe, str(ROOT / "outputs")],
+                env=env,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            paths = json.loads(result.stdout)
+
+            self.assertEqual(paths["home"], str(home))
+            self.assertEqual(paths["podsum_state"], str(home / "state.json"))
+            self.assertEqual(paths["email_state"], str(home / "state.json"))
+            self.assertEqual(paths["email_env"], str(home / ".env"))
+            self.assertEqual(paths["sender_state"], str(home / "feishu_sent.json"))
 
 
 if __name__ == "__main__":

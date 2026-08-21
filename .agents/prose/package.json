@@ -1,0 +1,36 @@
+{
+  "name": "prose",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "node tests/email-evidence-live-blackbox.test.cjs && node tests/evidence-relations-live-blackbox.test.cjs && node tests/email-intel-brief-live-blackbox.test.cjs && node tests/email-review-live-blackbox.test.cjs",
+    "test:bootstrap-live": "node tests/live-http-blackbox.test.cjs",
+    "test:bootstrap-compat": "node --test tests/bootstrap-compat.test.cjs",
+    "test:intel-brief": "node tests/email-intel-brief-live-blackbox.test.cjs",
+    "test:intel-brief-validator": "node tests/email-intel-brief-validator.test.cjs",
+    "test:review-validator": "node tests/email-review-validator.test.cjs",
+    "test:review": "node tests/email-review-live-blackbox.test.cjs",
+    "test:delivery": "node tests/email-delivery-live-blackbox.test.cjs",
+    "test:live": "node tests/live-http-blackbox.test.cjs && node tests/email-evidence-live-blackbox.test.cjs",
+    "test:evidence-relations": "PYTHONPATH=../../outputs ${PODSUM_PYTHON:-$HOME/Library/Application\\ Support/Podsum/.venv/bin/python} -m unittest discover -s ../../tests -p test_evidence_relations.py -v",
+    "evidence-daemon": "node src/evidence-reactor-daemon.cjs --contracts src --state .reactor --ledger /tmp/podsum-email-evidence-ledger.json --delivery-mode file --delivery-outbox /tmp/podsum-email-outbox --delivery-target local-file --port 8787",
+    "postinstall": "patch-package",
+    "test:shutdown": "node tests/daemon-shutdown.test.cjs",
+    "test:evidence-via": "node --test tests/evidence-via-response.test.cjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@openai/agents-openai": "^0.11.8",
+    "@openprose/reactor": "^0.3.1"
+  },
+  "devDependencies": {
+    "@openai/agents": "^0.11.8",
+    "@openprose/reactor-devtools": "^0.2.0",
+    "patch-package": "^8.0.1",
+    "zod": "^4.4.3"
+  }
+}

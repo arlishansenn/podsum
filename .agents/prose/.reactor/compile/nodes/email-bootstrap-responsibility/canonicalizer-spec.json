@@ -1,0 +1,30 @@
+{
+  "default_material": true,
+  "facets": [],
+  "fields": [
+    {
+      "material": true,
+      "path": "snapshot_event_id",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "path": "snapshot_message",
+      "text": {
+        "case_insensitive": false,
+        "collapse_whitespace": false
+      }
+    },
+    {
+      "material": true,
+      "number": {
+        "quantum": null
+      },
+      "path": "event_updates"
+    }
+  ],
+  "node": "email-bootstrap-responsibility"
+}
