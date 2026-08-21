@@ -3124,6 +3124,37 @@ class PodsumCliTest(unittest.TestCase):
         self.assertNotIn("defer:unmapped_topic", compact_json)
         self.assertNotIn("skipped", compact_json)
 
+    def test_empty_scan_day_is_a_quiet_no_op_not_a_failure(self) -> None:
+        """收件箱被清空的那天：不报错、不发送、不覆盖当天已有的 summary。
+
+        review_checklist 无条件要求 key takeaway 与来源溯源，空日必假，
+        send_report 会当场抛 RuntimeError。判空必须在写文件之前，不能等 checklist 兜。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            reports = tmp_path / "downloads" / "EmailReports"
+            reports.mkdir(parents=True)
+            existing = reports / "email-summary-2026-07-05.md"
+            existing.write_text("# 昨天写好的 brief\n", encoding="utf-8")
+
+            # 刻意不带 --no-send / --dry-run：真实那天走的就是这条路
+            result = run_podsum(
+                "email-summary",
+                "--scan-file",
+                str(ROOT / "tests" / "fixtures" / "email_summary_scans" / "email-scan-empty.json"),
+                "--output",
+                str(tmp_path / "downloads"),
+            )
+
+            output = result.stdout + result.stderr
+            self.assertEqual(result.returncode, 0, output)
+            self.assertNotIn("RuntimeError", output)
+            self.assertNotIn("failed Review Checklist", output)
+            self.assertIn("no mail in window", output)
+            self.assertEqual(existing.read_text(encoding="utf-8"), "# 昨天写好的 brief\n")
+            # 没写就不许说写了：日志里出现一个不存在的路径，正是这类静默谎报
+            self.assertNotIn("Wrote email summary", output)
+
     def test_email_summary_uses_empty_scan_file_without_real_imap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -3143,7 +3174,9 @@ class PodsumCliTest(unittest.TestCase):
             scan = json.loads(copied_scan.read_text(encoding="utf-8"))
             self.assertEqual(scan["raw_count"], 0)
             self.assertEqual(scan["items"], [])
-            self.assertIn("# Morning Brief - 2026-07-05", report.read_text(encoding="utf-8"))
+            # 空日不写 brief：写了就覆盖当天那份好的，而空 brief 还过不了 review checklist
+            self.assertFalse(report.exists())
+            self.assertIn("no mail in window", result.stdout + result.stderr)
 
     def test_email_summary_uses_truncated_scan_file_without_real_imap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

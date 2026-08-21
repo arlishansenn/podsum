@@ -548,6 +548,8 @@ def run_email_summary(args: argparse.Namespace) -> int:
     except Exception as exc:
         log(f"Email summary failed: {email_summary.error_text(exc)}")
         return 1
+    if report_path is None:
+        return 0
     log(f"Wrote email scan: {scan_path}")
     log(f"Wrote email summary: {report_path}")
     if epub_path:

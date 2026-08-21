@@ -2811,6 +2811,18 @@ def run(args: argparse.Namespace) -> tuple[Path, Path, Path | None]:
         scan = scan_imap(args, policy)
         scan_path = None
 
+    # 收件箱被清空的那天没有任何证据可写。继续往下走会写出一份空 brief，
+    # 再被 review_checklist 判为不合格并抛错——那不是失败，是无事发生。
+    # 判空必须在写文件之前：写过之后就已经覆盖掉当天那份好的 summary 了。
+    source_scan = scan if scan is not None else _read_scan_file(scan_path)
+    if not source_scan.get("items"):
+        # scan 记录照写：那是「今天确实跑过、确实没邮件」的凭据。
+        # 但 brief 不写——写了就覆盖掉当天那份好的，而空 brief 还会被
+        # review_checklist 判为不合格并抛错。那不是失败，是无事发生。
+        empty_pack = evidence_agent.build_evidence_pack(source_scan, policy, topic_map, False, fetch_link_context).to_dict()
+        log("no mail in window; skip brief")
+        return write_scan(args.output, empty_pack), None, None
+
     if summary_engine == "podsum":
         reason = "dry-run: Podsum local summary engine; no external summary engine called" if args.dry_run else ""
         scan_path, report_path, persisted_scan = run_podsum_email_graph(
@@ -2930,6 +2942,8 @@ def main() -> int:
     except Exception as exc:
         log(f"Email summary failed: {error_text(exc)}")
         return 1
+    if report_path is None:
+        return 0
     log(f"Wrote email scan: {scan_path}")
     log(f"Wrote email summary: {report_path}")
     if epub_path:
