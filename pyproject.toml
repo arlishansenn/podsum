@@ -1,0 +1,20 @@
+# Podsum 不是可安装的发行包：代码在 outputs/ 下靠路径直接运行。
+# 这里只用 PEP 735 dependency groups 声明依赖，不写 [project]，不引入 build backend。
+#
+#   pip install --group runtime
+#   pip install --group transcribe   # 仅 Apple Silicon 需要本地转写时
+#
+# 内容手写，源头是代码里实际存在的 import，不从现有 venv 导出——
+# 那个 venv 混着别的项目的依赖，同时缺着本项目需要的包。
+
+[dependency-groups]
+runtime = [
+    "langgraph",
+    "langchain-core",
+    "EbookLib",
+    "Pygments",
+]
+# 唯一真正绑定 Apple Silicon 的一条链，拖着 mlx-metal / torch / numba / scipy。
+transcribe = [
+    "mlx-whisper",
+]

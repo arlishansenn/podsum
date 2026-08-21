@@ -3861,6 +3861,30 @@ class PodsumCliTest(unittest.TestCase):
             for default in defaults:
                 self.assertEqual(default, "")
 
+    def test_runtime_dependencies_are_installed_and_epub_is_not_degraded(self) -> None:
+        """冒烟断言：runtime 组的依赖真的可用，且 EPUB 没有走降级实现。
+
+        不做「扫 import 和 manifest 比对」的守卫测试：代码里的第三方 import 全部
+        包在 try/except 里，漏装不报错而是静默降级，比对清单测的是错的对象；而且
+        import 名与发行名多数对不上，outputs/email 又和 stdlib email 同名。
+        直接测真正关心的那个属性最短也最准。
+        """
+        import tomllib
+
+        declared = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertIn("runtime", declared["dependency-groups"])
+
+        for module in ("langgraph", "langchain_core", "ebooklib", "pygments"):
+            with self.subTest(module=module):
+                __import__(module)
+
+        from podsum_core.epub_converter import epub_generator
+
+        self.assertIsNotNone(
+            epub_generator.epub,
+            "ebooklib 未装：EPUB 会静默走 _write_minimal_epub 降级路径。跑 pip install --group runtime",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
