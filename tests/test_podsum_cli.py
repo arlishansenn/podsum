@@ -4477,6 +4477,35 @@ class LlmBriefTest(unittest.TestCase):
         self.assertNotIn("dry-run", surfaced)
 
 
+class EditableFilesDocTest(unittest.TestCase):
+    """文档写死的链接上限必须跟代码一致，否则读者按文档调完发现没生效。"""
+
+    def test_documented_link_limits_match_the_default_policy(self) -> None:
+        readme = (ROOT / "outputs" / "README.md").read_text(encoding="utf-8")
+        limits = email_summary.DEFAULT_POLICY["limits"]
+
+        self.assertIn("## Editable Email Summary Files", readme)
+        section = readme.split("## Editable Email Summary Files", 1)[1].split("\n## ", 1)[0]
+        self.assertIn(f"{limits['max_links_per_email']} links per email", section)
+        self.assertIn(f"{limits['max_links_total']} links in total", section)
+
+    def test_the_three_editable_files_are_all_named(self) -> None:
+        readme = (ROOT / "outputs" / "README.md").read_text(encoding="utf-8")
+        section = readme.split("## Editable Email Summary Files", 1)[1].split("\n## ", 1)[0]
+
+        for name in ("email_summary_prompt.md", "topic.md", "email_link_policy.md"):
+            with self.subTest(name=name):
+                self.assertIn(name, section)
+
+        # 三个文件的归属不同，文档说反了读者就会去改错的那份
+        self.assertTrue((ROOT / "outputs" / "email_summary_prompt.md").exists(), "prompt 直接入库，安装时会被覆盖")
+        for user_file in ("topic.md", "email_link_policy.md"):
+            with self.subTest(user_file=user_file):
+                self.assertTrue((ROOT / "outputs" / f"{user_file}.example").exists())
+                self.assertNotIn(f"outputs/{user_file}", subprocess.run(
+                    ["git", "ls-files", f"outputs/{user_file}"], cwd=str(ROOT), text=True, capture_output=True
+                ).stdout, "用户文件不该入库，否则同步会盖掉界面上的编辑")
+
 
 if __name__ == "__main__":
     unittest.main()
