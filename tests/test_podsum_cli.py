@@ -4282,6 +4282,120 @@ class DigestRenderingTest(unittest.TestCase):
         self.assertIn("](https://example.invalid/rwa-defi)", markdown)
 
 
+class LlmBriefTest(unittest.TestCase):
+    """podsum 引擎的 brief 必须由 LLM 写；模板是失败时的兜底，不是常态。"""
+
+    SCAN = {
+        "object_type": "email_evidence_pack",
+        "object_version": "1",
+        "status": "ready_for_summary",
+        "date": "2026-08-21",
+        "account": "fixture@example.invalid",
+        "window": "1d",
+        "scan_limit": 10,
+        "raw_count": 1,
+        "possibly_truncated": False,
+        "items": [
+            {
+                "uid": "77",
+                "date": "Fri, 21 Aug 2026 08:00:00 +0800",
+                "from": "Someone <someone@example.invalid>",
+                "subject": "Fixture Follow-up",
+                "snippet": "需要回复的邮件",
+                "email_type": "personal",
+                "links": [],
+                "evidence": [],
+                "risks": [],
+                "flags": [],
+            }
+        ],
+    }
+
+    def _writer(self, outcome):
+        calls = []
+
+        def fake_hermes(_binary, prompt, cwd=None, timeout=None):
+            calls.append(prompt)
+            return outcome
+
+        return fake_hermes, calls
+
+    def _render(self, outcome, reason=""):
+        fake, calls = self._writer(outcome)
+        real = email_summary.run_hermes_prompt
+        email_summary.run_hermes_prompt = fake
+        try:
+            markdown = email_summary.llm_brief_markdown(
+                self.SCAN,
+                hermes="/nonexistent/hermes",
+                prompt_path=ROOT / "outputs" / "email_summary_prompt.md",
+                project_dir=ROOT,
+                timeout=5,
+                reason=reason,
+            )
+        finally:
+            email_summary.run_hermes_prompt = real
+        return markdown, calls
+
+    def _compose(self, writer):
+        pack = EmailEvidencePack.from_dict(self.SCAN)
+        return brief_agent.compose_with_need_store(
+            pack, {}, email_summary.empty_need_store(), "", {}, "dry-run: skipped", writer
+        ).email_intel_brief.markdown
+
+    def test_no_writer_means_deterministic_template(self) -> None:
+        """writer 为空就是 dry-run 那条路：不调 LLM，输出确定。"""
+        markdown = self._compose(None)
+
+        self.assertIn("Fixture Follow-up", markdown)
+        self.assertNotIn("dry-run", markdown, "内部处理用语不进正文")
+
+    def test_writer_is_what_produces_the_brief_when_present(self) -> None:
+        """装了 writer 就必须由它写，模板退到兜底位置。"""
+        seen = []
+
+        def writer(scan_dict, reason):
+            seen.append(reason)
+            return "# Morning Brief - 2026-08-21\n\n只有 LLM 会这么写。\n"
+
+        markdown = self._compose(writer)
+
+        self.assertEqual(seen, ["dry-run: skipped"])
+        self.assertIn("只有 LLM 会这么写", markdown)
+        self.assertNotIn("Fixture Follow-up", markdown, "不该再走模板")
+
+    def test_llm_output_becomes_the_brief(self) -> None:
+        markdown, calls = self._render((True, "# Morning Brief - 2026-08-21\n\n## 今天先看\n\n- LLM 写的判断。[UID 77](email://2026-08-21/77)\n"))
+
+        self.assertEqual(len(calls), 1, "必须真的调用 LLM")
+        self.assertIn("LLM 写的判断", markdown)
+        self.assertIn("Fixture Follow-up", calls[0], "EvidencePack JSON 要进 prompt")
+        self.assertIn("逐条展开", calls[0], "prompt 文件里的规则要进去")
+
+    def test_llm_failure_falls_back_to_template_and_says_so(self) -> None:
+        markdown, calls = self._render((False, "hermes exited 1"))
+
+        self.assertEqual(len(calls), 1)
+        self.assertIn("# Morning Brief - 2026-08-21", markdown)
+        self.assertIn("Fixture Follow-up", markdown, "回落到确定性模板")
+        self.assertIn("降级", markdown, "降级必须写进 brief，否则没人知道今天这份是模板")
+
+    def test_empty_llm_output_also_falls_back(self) -> None:
+        markdown, _ = self._render((True, "   "))
+
+        self.assertIn("Fixture Follow-up", markdown)
+        self.assertIn("降级", markdown)
+
+    def test_notice_is_user_facing_while_reason_stays_internal(self) -> None:
+        """降级要让用户看见，但内部处理用语不能进正文——既有契约禁止暴露处理流程。"""
+        internal = email_summary.build_intel_brief_draft(self.SCAN, "dry-run: skipped Hermes summary")
+        self.assertNotIn("dry-run", internal)
+
+        surfaced = email_summary.build_intel_brief_draft(self.SCAN, "dry-run: skipped", notice="降级：本篇由确定性模板产出。")
+        self.assertIn("降级：本篇由确定性模板产出。", surfaced)
+        self.assertNotIn("dry-run", surfaced)
+
+
 
 if __name__ == "__main__":
     unittest.main()
