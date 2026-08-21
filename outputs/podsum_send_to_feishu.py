@@ -22,7 +22,7 @@ from podsum_core.epub_converter import create_epub_from_markdown
 
 
 DEFAULT_TRANSCRIPTS_ROOT = Path.home() / "Podcasts/AutoDownloads"
-DEFAULT_STATE_FILE = Path.home() / "Library/Application Support/Podsum/feishu_sent.json"
+DEFAULT_STATE_FILE = podsum_runtime.podsum_home() / "feishu_sent.json"
 DEFAULT_MEMORY_FILE = Path.home() / ".hermes/memories/MEMORY.md"
 DEFAULT_INTERPRETATION_PROMPT = Path(__file__).with_name("hermes_interpretation_prompt.md")
 DEFAULT_INTERPRETATION_RULES = Path(__file__).with_name("interpretation_rules.md")

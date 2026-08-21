@@ -3885,6 +3885,46 @@ class PodsumCliTest(unittest.TestCase):
             "ebooklib 未装：EPUB 会静默走 _write_minimal_epub 降级路径。跑 pip install --group runtime",
         )
 
+    def test_deployment_root_defaults_follow_podsum_home(self) -> None:
+        """部署根只能有一处解析。各模块各写死一份，PODSUM_HOME 就会装出半残部署：
+        装在 A、却从 B 读配置往 B 写状态，而且零报错。
+
+        必须在子进程里验证：这些默认值是 import 期算出来的模块常量。
+        """
+        probe = textwrap.dedent(
+            """
+            import json, sys
+            sys.path.insert(0, sys.argv[1])
+            import podsum, podsum_runtime
+            import podsum_email_summary as email_summary
+            import podsum_send_to_feishu as sender
+            print(json.dumps({
+                "home": str(podsum_runtime.podsum_home()),
+                "podsum_state": str(podsum.DEFAULT_STATE_FILE),
+                "email_state": str(email_summary.DEFAULT_STATE_FILE),
+                "email_env": str(email_summary.DEFAULT_ENV_FILE),
+                "sender_state": str(sender.DEFAULT_STATE_FILE),
+            }))
+            """
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "elsewhere"
+            env = dict(os.environ, PODSUM_HOME=str(home))
+            result = subprocess.run(
+                [sys.executable, "-c", probe, str(ROOT / "outputs")],
+                env=env,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            paths = json.loads(result.stdout)
+
+            self.assertEqual(paths["home"], str(home))
+            self.assertEqual(paths["podsum_state"], str(home / "state.json"))
+            self.assertEqual(paths["email_state"], str(home / "state.json"))
+            self.assertEqual(paths["email_env"], str(home / ".env"))
+            self.assertEqual(paths["sender_state"], str(home / "feishu_sent.json"))
+
 
 if __name__ == "__main__":
     unittest.main()

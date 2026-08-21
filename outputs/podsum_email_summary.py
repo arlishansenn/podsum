@@ -40,12 +40,12 @@ from podsum_core.delivery import run_hermes_prompt, send_hermes_file
 
 
 DEFAULT_OUTPUT_DIR = Path.home() / "Podcasts/AutoDownloads"
-DEFAULT_ENV_FILE = Path.home() / "Library/Application Support/Podsum/.env"
+DEFAULT_ENV_FILE = podsum_runtime.default_env_file()
 DEFAULT_PROMPT = Path(__file__).with_name("email_summary_prompt.md")
 DEFAULT_EVIDENCE_PREPROCESS_PROMPT = Path(__file__).with_name("email_evidence_preprocess_prompt.md")
 DEFAULT_LINK_POLICY = Path(__file__).with_name("email_link_policy.md")
 DEFAULT_TOPIC_FILE = Path(__file__).with_name("topic.md")
-DEFAULT_STATE_FILE = Path.home() / "Library/Application Support/Podsum/state.json"
+DEFAULT_STATE_FILE = podsum_runtime.podsum_home() / "state.json"
 DEFAULT_HERMES = sender.DEFAULT_HERMES
 DEFAULT_TARGET = sender.DEFAULT_TARGET
 load_env_file = podsum_runtime.load_env_file

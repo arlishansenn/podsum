@@ -16,10 +16,11 @@ from typing import Any
 import podcast_downloader as downloader
 import podsum_email_summary as email_summary
 import podsum_email_workbench as email_workbench
+import podsum_runtime
 import podsum_send_to_feishu as sender
 
 
-DEFAULT_STATE_FILE = Path.home() / "Library/Application Support/Podsum/state.json"
+DEFAULT_STATE_FILE = podsum_runtime.podsum_home() / "state.json"
 DEFAULT_OUTPUT_DIR = Path.home() / "Podcasts/AutoDownloads"
 DEFAULT_FEEDS_FILE = Path(__file__).with_name("feeds.json")
 
@@ -715,7 +716,7 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_parser.add_argument(
         "--old-sent-state",
         type=Path,
-        default=Path.home() / "Library/Application Support/Podsum/feishu_sent.json",
+        default=podsum_runtime.podsum_home() / "feishu_sent.json",
     )
     migrate_parser.set_defaults(func=migrate_state)
 
