@@ -18,6 +18,7 @@ from typing import Optional
 ROOT = Path(__file__).resolve().parents[1]
 PODSUM = ROOT / "outputs" / "podsum.py"
 sys.path.insert(0, str(ROOT / "outputs"))
+import podsum  # noqa: E402
 import podsum_email_summary as email_summary  # noqa: E402
 import podsum_email_workbench as email_workbench  # noqa: E402
 import podsum_runtime  # noqa: E402
@@ -3666,6 +3667,95 @@ class PodsumCliTest(unittest.TestCase):
         self.assertIn("{rules}", sender.DEFAULT_INTERPRETATION_PROMPT.read_text(encoding="utf-8"))
         self.assertTrue(sender.DEFAULT_INTERPRETATION_RULES.exists())
         self.assertEqual(sender.interpretation_rules_block(sender.DEFAULT_INTERPRETATION_RULES), "")
+
+    def test_interpretation_rules_flag_defaults_to_the_shipped_file_in_both_entrypoints(self) -> None:
+        self.assertEqual(
+            podsum.build_parser().parse_args(["send"]).interpretation_rules,
+            sender.DEFAULT_INTERPRETATION_RULES,
+        )
+        self.assertEqual(
+            sender.build_parser().parse_args([]).interpretation_rules,
+            sender.DEFAULT_INTERPRETATION_RULES,
+        )
+
+    def path_dests(self, parser: argparse.ArgumentParser, skip: frozenset = frozenset()) -> set:
+        """收集一个 parser（含子命令）里所有 type=Path 的 dest。"""
+        dests = set()
+        for action in parser._actions:
+            if action.type is Path:
+                dests.add(action.dest)
+            if isinstance(action, argparse._SubParsersAction):
+                for name, subparser in action.choices.items():
+                    if name not in skip:
+                        dests |= self.path_dests(subparser, skip)
+        return dests
+
+    def test_path_args_table_covers_every_path_argument_the_entrypoints_own(self) -> None:
+        # email-summary 自带 normalize_args，它的路径参数由该模块自己展开。
+        delegated = frozenset({"email-summary"})
+
+        self.assertEqual(self.path_dests(podsum.build_parser(), delegated), set(podsum.PATH_ARGS))
+        self.assertEqual(self.path_dests(sender.build_parser()), set(sender.PATH_ARGS))
+
+    def test_normalize_args_expands_tilde_on_every_path_argument(self) -> None:
+        args = argparse.Namespace(**{name: Path("~/x") / name for name in podsum.PATH_ARGS})
+
+        podsum.normalize_args(args)
+
+        for name in podsum.PATH_ARGS:
+            value = getattr(args, name)
+            self.assertEqual(value, Path.home() / "x" / name, name)
+
+    def test_normalize_args_skips_absent_and_optional_none_path_arguments(self) -> None:
+        args = argparse.Namespace(interpretation_rules=Path("~/rules.md"), email_eml_dir=None)
+
+        podsum.normalize_args(args)
+
+        self.assertEqual(args.interpretation_rules, Path.home() / "rules.md")
+        self.assertIsNone(args.email_eml_dir)
+        self.assertFalse(hasattr(args, "state"))
+
+    def test_send_ready_forwards_the_interpretation_rules_path_to_the_sender(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript = Path(tmp) / "show" / "episode.md"
+            transcript.parent.mkdir(parents=True)
+            transcript.write_text("body", encoding="utf-8")
+            rules = Path(tmp) / "rules.md"
+            args = argparse.Namespace(
+                output=Path(tmp),
+                state=Path(tmp) / "state.json",
+                memory_file=Path(tmp) / "memory.md",
+                interpretation_prompt=Path(tmp) / "prompt.md",
+                interpretation_rules=rules,
+                project_dir=Path(tmp),
+                target="discord:1",
+                hermes=Path(tmp) / "hermes",
+                hermes_timeout=30,
+            )
+            state = {
+                "episodes": {
+                    "key": {
+                        "status": "transcribed",
+                        "transcript_path": str(transcript),
+                        "transcript_sha256": podsum.sha256_file(transcript),
+                        "attempts": {},
+                    }
+                }
+            }
+            seen = {}
+
+            def fake_build_bundle(compatible, pending):
+                seen["interpretation_rules"] = compatible.interpretation_rules
+                raise RuntimeError("stop after wiring check")
+
+            real_build_bundle, real_log = sender.build_bundle, podsum.log
+            sender.build_bundle, podsum.log = fake_build_bundle, lambda message: None
+            try:
+                podsum.send_ready(args, state)
+            finally:
+                sender.build_bundle, podsum.log = real_build_bundle, real_log
+
+            self.assertEqual(seen["interpretation_rules"], rules)
 
 
 if __name__ == "__main__":

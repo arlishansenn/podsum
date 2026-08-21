@@ -23,6 +23,30 @@ DEFAULT_STATE_FILE = Path.home() / "Library/Application Support/Podsum/state.jso
 DEFAULT_OUTPUT_DIR = Path.home() / "Podcasts/AutoDownloads"
 DEFAULT_FEEDS_FILE = Path(__file__).with_name("feeds.json")
 
+# 所有取 Path 的 CLI 参数。子命令只带其中一部分，可选参数默认为 None。
+PATH_ARGS = (
+    "feeds_file",
+    "state",
+    "output",
+    "memory_file",
+    "interpretation_prompt",
+    "interpretation_rules",
+    "project_dir",
+    "hermes",
+    "old_download_state",
+    "old_sent_state",
+    "email_env_file",
+    "email_scan_file",
+    "email_eml_dir",
+    "email_summary_prompt",
+    "email_evidence_preprocess_prompt",
+    "email_link_policy",
+    "email_topic_file",
+    "root",
+    "policy_file",
+    "topic_file",
+)
+
 
 def log(message: str) -> None:
     print(message, flush=True)
@@ -702,46 +726,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def normalize_args(args: argparse.Namespace) -> None:
-    if hasattr(args, "feeds_file"):
-        args.feeds_file = args.feeds_file.expanduser()
-    if hasattr(args, "state"):
-        args.state = args.state.expanduser()
-    if hasattr(args, "output"):
-        args.output = args.output.expanduser()
-    if hasattr(args, "memory_file"):
-        args.memory_file = args.memory_file.expanduser()
-    if hasattr(args, "interpretation_prompt"):
-        args.interpretation_prompt = args.interpretation_prompt.expanduser()
-    if hasattr(args, "interpretation_rules"):
-        args.interpretation_rules = args.interpretation_rules.expanduser()
-    if hasattr(args, "project_dir"):
-        args.project_dir = args.project_dir.expanduser()
-    if hasattr(args, "hermes"):
-        args.hermes = args.hermes.expanduser()
-    if hasattr(args, "old_download_state"):
-        args.old_download_state = args.old_download_state.expanduser()
-    if hasattr(args, "old_sent_state"):
-        args.old_sent_state = args.old_sent_state.expanduser()
-    if hasattr(args, "email_env_file"):
-        args.email_env_file = args.email_env_file.expanduser()
-    if hasattr(args, "email_scan_file") and args.email_scan_file:
-        args.email_scan_file = args.email_scan_file.expanduser()
-    if hasattr(args, "email_eml_dir") and args.email_eml_dir:
-        args.email_eml_dir = args.email_eml_dir.expanduser()
-    if hasattr(args, "email_summary_prompt"):
-        args.email_summary_prompt = args.email_summary_prompt.expanduser()
-    if hasattr(args, "email_evidence_preprocess_prompt"):
-        args.email_evidence_preprocess_prompt = args.email_evidence_preprocess_prompt.expanduser()
-    if hasattr(args, "email_link_policy"):
-        args.email_link_policy = args.email_link_policy.expanduser()
-    if hasattr(args, "email_topic_file"):
-        args.email_topic_file = args.email_topic_file.expanduser()
-    if hasattr(args, "root"):
-        args.root = args.root.expanduser()
-    if hasattr(args, "policy_file"):
-        args.policy_file = args.policy_file.expanduser()
-    if hasattr(args, "topic_file"):
-        args.topic_file = args.topic_file.expanduser()
+    """就地把本次子命令带到的路径参数展开 `~`。缺席或为 None 的参数原样跳过。"""
+    for name in PATH_ARGS:
+        value = getattr(args, name, None)
+        if value is not None:
+            setattr(args, name, value.expanduser())
 
 
 def main() -> int:

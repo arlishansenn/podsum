@@ -37,6 +37,17 @@ MEMORY_EXCERPT_CHARS = 12000
 INTERPRETATION_RULES_EXCERPT_CHARS = 4000
 INTERPRETATION_RULES_HEADER = "用户附加规则（与上面要求冲突时，以这里为准）:"
 
+# 本模块直接运行时需要展开 `~` 的路径参数。全部为必选，永不为 None。
+PATH_ARGS = (
+    "transcripts_root",
+    "state",
+    "memory_file",
+    "interpretation_prompt",
+    "interpretation_rules",
+    "project_dir",
+    "hermes",
+)
+
 
 def log(message: str) -> None:
     print(message, flush=True)
@@ -472,13 +483,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    args.transcripts_root = args.transcripts_root.expanduser()
-    args.state = args.state.expanduser()
-    args.memory_file = args.memory_file.expanduser()
-    args.interpretation_prompt = args.interpretation_prompt.expanduser()
-    args.interpretation_rules = args.interpretation_rules.expanduser()
-    args.project_dir = args.project_dir.expanduser()
-    args.hermes = args.hermes.expanduser()
+    for name in PATH_ARGS:
+        setattr(args, name, getattr(args, name).expanduser())
     if args.audio_retention_days < -1:
         parser.error("--audio-retention-days must be >= -1")
     if args.transcript_retention_days < -1:
