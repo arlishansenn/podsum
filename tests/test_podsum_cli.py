@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "outputs"))
 import podsum_email_summary as email_summary  # noqa: E402
 import podsum_email_workbench as email_workbench  # noqa: E402
 import podsum_runtime  # noqa: E402
+import podsum_send_to_feishu as sender  # noqa: E402
 from email import brief_agent, evidence_agent, graph as email_graph, need_store, object_harness  # noqa: E402
 from email.providers import FakeLinkClassifier, LinkClassification  # noqa: E402
 from email.schemas import EmailEvidencePack, EmailIntelBrief, EvidenceNeed, EvidenceNeedEvent, transition_need  # noqa: E402
@@ -3555,6 +3556,98 @@ class PodsumCliTest(unittest.TestCase):
             data = json.loads(state.read_text(encoding="utf-8"))
             self.assertEqual(data["episodes"]["canonical-key"]["status"], "sent")
             self.assertEqual(data["episodes"]["canonical-key"]["transcript_sha256"], digest)
+
+    def capture_interpretation_prompt(
+        self,
+        tmp_path: Path,
+        *,
+        rules_text: Optional[str],
+        template: Optional[str] = None,
+    ) -> str:
+        """Run one interpretation through a fake Hermes and return the prompt it received."""
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        prompt_file = tmp_path / "prompt.txt"
+        hermes = tmp_path / "hermes"
+        hermes.write_text(
+            "#!/bin/sh\n"
+            f"if [ \"$1\" = \"-z\" ]; then printf '%s' \"$2\" > {prompt_file}; echo '解读正文'; exit 0; fi\n"
+            "exit 2\n",
+            encoding="utf-8",
+        )
+        hermes.chmod(0o755)
+
+        prompt_path = tmp_path / "interpretation_prompt.md"
+        prompt_path.write_text(
+            sender.DEFAULT_INTERPRETATION_PROMPT.read_text(encoding="utf-8") if template is None else template,
+            encoding="utf-8",
+        )
+        rules_path = tmp_path / "interpretation_rules.md"
+        if rules_text is not None:
+            rules_path.write_text(rules_text, encoding="utf-8")
+
+        args = argparse.Namespace(
+            memory_file=tmp_path / "missing-memory.md",
+            interpretation_prompt=prompt_path,
+            interpretation_rules=rules_path,
+            hermes=hermes,
+            project_dir=tmp_path,
+            hermes_timeout=30,
+        )
+        info = {"podcast": "Fixture Show", "episode": "New Episode", "body": "Transcript body."}
+
+        self.assertEqual(sender.hermes_interpretation(args, info), "解读正文")
+        return prompt_file.read_text(encoding="utf-8")
+
+    def test_interpretation_rules_file_is_injected_after_builtin_requirements(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt = self.capture_interpretation_prompt(
+                Path(tmp),
+                rules_text="<!-- 一行一条，中文自然语言 -->\n- 这一集偏技术，多留代码细节。\n- 长度压到 600 字以内。\n",
+            )
+
+            self.assertIn(sender.INTERPRETATION_RULES_HEADER, prompt)
+            self.assertIn("这一集偏技术，多留代码细节。", prompt)
+            self.assertIn("长度压到 600 字以内。", prompt)
+            self.assertNotIn("一行一条，中文自然语言", prompt)
+            self.assertLess(
+                prompt.index("不要编造文字稿里没有的信息"),
+                prompt.index(sender.INTERPRETATION_RULES_HEADER),
+            )
+            self.assertLess(prompt.index(sender.INTERPRETATION_RULES_HEADER), prompt.index("Podcast: Fixture Show"))
+
+    def test_missing_interpretation_rules_file_renders_prompt_without_rules_section(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt = self.capture_interpretation_prompt(Path(tmp), rules_text=None)
+
+            self.assertNotIn(sender.INTERPRETATION_RULES_HEADER, prompt)
+            self.assertIn("Podcast: Fixture Show", prompt)
+            self.assertIn("Transcript body.", prompt)
+
+    def test_comment_only_interpretation_rules_file_renders_prompt_without_rules_section(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt = self.capture_interpretation_prompt(
+                Path(tmp),
+                rules_text="<!--\n在下面写你的解读规则，一行一条。\n-->\n\n",
+            )
+
+            self.assertNotIn(sender.INTERPRETATION_RULES_HEADER, prompt)
+            self.assertNotIn("在下面写你的解读规则", prompt)
+
+    def test_legacy_prompt_without_rules_placeholder_still_renders(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt = self.capture_interpretation_prompt(
+                Path(tmp),
+                rules_text="- 长度压到 600 字以内。\n",
+                template="旧模板\n\nPodcast: {podcast}\nEpisode: {episode}\n\n{transcript}\n",
+            )
+
+            self.assertIn("Podcast: Fixture Show", prompt)
+            self.assertNotIn("长度压到 600 字以内。", prompt)
+
+    def test_shipped_interpretation_rules_file_is_empty_so_default_output_is_unchanged(self) -> None:
+        self.assertIn("{rules}", sender.DEFAULT_INTERPRETATION_PROMPT.read_text(encoding="utf-8"))
+        self.assertTrue(sender.DEFAULT_INTERPRETATION_RULES.exists())
+        self.assertEqual(sender.read_interpretation_rules(sender.DEFAULT_INTERPRETATION_RULES), "")
 
 
 if __name__ == "__main__":

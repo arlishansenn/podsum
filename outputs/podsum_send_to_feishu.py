@@ -24,6 +24,7 @@ DEFAULT_TRANSCRIPTS_ROOT = Path.home() / "Podcasts/AutoDownloads"
 DEFAULT_STATE_FILE = Path.home() / "Library/Application Support/Podsum/feishu_sent.json"
 DEFAULT_MEMORY_FILE = Path.home() / ".hermes/memories/MEMORY.md"
 DEFAULT_INTERPRETATION_PROMPT = Path(__file__).with_name("hermes_interpretation_prompt.md")
+DEFAULT_INTERPRETATION_RULES = Path(__file__).with_name("interpretation_rules.md")
 DEFAULT_TARGET = "discord:1518857496788467832"
 DEFAULT_HERMES = Path.home() / ".local/bin/hermes"
 DEFAULT_AUDIO_RETENTION_DAYS = 14
@@ -33,6 +34,8 @@ DEFAULT_BUNDLE_RETENTION_DAYS = 90
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".opus", ".aac", ".mp4", ".m4v"}
 TRANSCRIPT_EXCERPT_CHARS = 50000
 MEMORY_EXCERPT_CHARS = 12000
+INTERPRETATION_RULES_EXCERPT_CHARS = 4000
+INTERPRETATION_RULES_HEADER = "用户附加规则（与上面要求冲突时，以这里为准）:"
 
 
 def log(message: str) -> None:
@@ -219,6 +222,14 @@ def write_epub(markdown_path: Path, title: str) -> Path:
     return epub_path
 
 
+def read_interpretation_rules(path: Path) -> str:
+    """用户手写的自然语言解读规则；文件缺失、为空或只有注释时返回空串。"""
+    if not path.exists():
+        return ""
+    text = re.sub(r"<!--.*?-->", "", path.read_text(encoding="utf-8", errors="replace"), flags=re.DOTALL)
+    return text.strip()[:INTERPRETATION_RULES_EXCERPT_CHARS]
+
+
 def hermes_interpretation(args: argparse.Namespace, info: dict[str, Any]) -> str:
     memory = ""
     if args.memory_file.exists():
@@ -228,12 +239,17 @@ def hermes_interpretation(args: argparse.Namespace, info: dict[str, Any]) -> str
     if len(transcript) > TRANSCRIPT_EXCERPT_CHARS:
         transcript = transcript[:TRANSCRIPT_EXCERPT_CHARS] + "\n\n[文字稿已截断，仅用于生成顶部解读]"
 
+    rules = read_interpretation_rules(args.interpretation_rules)
+    # 表头随规则一起出现，规则为空时整段消失，prompt 与加这个功能之前等价。
+    rules_block = f"{INTERPRETATION_RULES_HEADER}\n{rules}" if rules else ""
+
     template = read_text(args.interpretation_prompt)
     prompt = template.format(
         memory=memory,
         podcast=info["podcast"],
         episode=info["episode"],
         transcript=transcript,
+        rules=rules_block,
     )
     ok, value = run_hermes_prompt(
         str(args.hermes),
@@ -435,6 +451,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE_FILE)
     parser.add_argument("--memory-file", type=Path, default=DEFAULT_MEMORY_FILE)
     parser.add_argument("--interpretation-prompt", type=Path, default=DEFAULT_INTERPRETATION_PROMPT)
+    parser.add_argument("--interpretation-rules", type=Path, default=DEFAULT_INTERPRETATION_RULES, help="用户手写的自然语言解读规则文件，注入 prompt 的 {rules} 占位符。")
     parser.add_argument("--project-dir", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--target", default=DEFAULT_TARGET)
     parser.add_argument("--hermes", type=Path, default=DEFAULT_HERMES)
@@ -457,6 +474,7 @@ def main() -> int:
     args.state = args.state.expanduser()
     args.memory_file = args.memory_file.expanduser()
     args.interpretation_prompt = args.interpretation_prompt.expanduser()
+    args.interpretation_rules = args.interpretation_rules.expanduser()
     args.project_dir = args.project_dir.expanduser()
     args.hermes = args.hermes.expanduser()
     if args.audio_retention_days < -1:

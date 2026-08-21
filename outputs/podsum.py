@@ -368,6 +368,7 @@ def send_ready(args: argparse.Namespace, state: dict[str, Any]) -> int:
         state=args.state,
         memory_file=args.memory_file,
         interpretation_prompt=args.interpretation_prompt,
+        interpretation_rules=args.interpretation_rules,
         project_dir=args.project_dir,
         target=args.target,
         hermes=args.hermes,
@@ -599,6 +600,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--transcribe-verbose", action="store_true")
     parser.add_argument("--memory-file", type=Path, default=sender.DEFAULT_MEMORY_FILE)
     parser.add_argument("--interpretation-prompt", type=Path, default=sender.DEFAULT_INTERPRETATION_PROMPT)
+    parser.add_argument("--interpretation-rules", type=Path, default=sender.DEFAULT_INTERPRETATION_RULES, help="用户手写的自然语言解读规则文件，注入 prompt 的 {rules} 占位符。")
     parser.add_argument("--project-dir", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--target", default=sender.DEFAULT_TARGET)
     parser.add_argument("--hermes", type=Path, default=sender.DEFAULT_HERMES)
@@ -710,6 +712,8 @@ def normalize_args(args: argparse.Namespace) -> None:
         args.memory_file = args.memory_file.expanduser()
     if hasattr(args, "interpretation_prompt"):
         args.interpretation_prompt = args.interpretation_prompt.expanduser()
+    if hasattr(args, "interpretation_rules"):
+        args.interpretation_rules = args.interpretation_rules.expanduser()
     if hasattr(args, "project_dir"):
         args.project_dir = args.project_dir.expanduser()
     if hasattr(args, "hermes"):
