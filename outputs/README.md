@@ -10,11 +10,23 @@ through the same delivery target. Offline validation can run from sanitized
 
 ## Runtime
 
-Project:
+This file documents the deployed copy. Podsum runs from a materialised copy under
+the macOS application support directory, not from the git clone:
 
 ```text
-/Users/admin/Documents/Codex/podsum
+/Users/admin/Library/Application Support/Podsum          # deployed root
+/Users/admin/Library/Application Support/Podsum/outputs  # deployed code
+/Users/admin/Library/Application Support/Podsum/.venv    # runtime interpreter
 ```
+
+The git clone is a separate development copy:
+
+```text
+~/project/podsum
+```
+
+The deployed copy has no `.git` and nothing synchronises the two. A change in the
+clone reaches production only when someone copies it across.
 
 Audio and transcripts:
 
@@ -39,7 +51,7 @@ State:
 `macmini` currently has no Apple Podcasts subscriptions in its local Podcasts database, so Podsum uses the project feed list:
 
 ```text
-/Users/admin/Documents/Codex/podsum/outputs/feeds.json
+/Users/admin/Library/Application Support/Podsum/outputs/feeds.json
 ```
 
 ## Python Runtime
@@ -81,7 +93,7 @@ with an explicit error instead of falling back to the old Python parser.
 Check active feeds:
 
 ```sh
-"$PODSUM_PYTHON" /Users/admin/Documents/Codex/podsum/outputs/podcast_downloader.py --list
+"$PODSUM_PYTHON" /Users/admin/Library/Application Support/Podsum/outputs/podcast_downloader.py --list
 ```
 
 ## Scheduled Job
@@ -424,7 +436,7 @@ outputs/transcript_cleaner/
 It is manually invoked and is not part of `com.local.podsum`:
 
 ```sh
-cd /Users/admin/Documents/Codex/podsum/outputs
+cd /Users/admin/Library/Application Support/Podsum/outputs
 "$PODSUM_PYTHON" -m transcript_cleaner input.md --output-dir output
 ```
 

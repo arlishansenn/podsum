@@ -19,7 +19,7 @@ copy inside this package.
 运行：
 
 ```sh
-cd /Users/admin/Documents/Codex/podsum/outputs
+cd /Users/admin/Library/Application Support/Podsum/outputs
 
 /usr/bin/python3 -m transcript_cleaner \
   /path/to/source.md \
