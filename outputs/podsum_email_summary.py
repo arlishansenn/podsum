@@ -1633,7 +1633,32 @@ def scan_eml_dir(args: argparse.Namespace, policy: dict[str, Any]) -> dict[str, 
     return scan_payload(DEFAULT_FIXTURE_ACCOUNT, args.recent_days, args.limit, raw_count, items)
 
 
+SELF_SUBJECT_PREFIX = "[Podsum]"
+
+
+def is_self_mail(item: dict[str, Any], account: str) -> bool:
+    """Podsum 自己发出去的邮件。
+
+    投递目标和扫描邮箱是同一个地址时，brief 会把自己读回来，并且逐日放大：
+    今天的 brief 是明天的输入。两条判据缺一不可——按地址挡不住将来从别的地址
+    发的 brief，按主题挡不住 SMTP Connection Test 这类没有前缀的自发邮件。
+    """
+    subject = str(item.get("subject") or "").strip()
+    if subject.startswith(SELF_SUBJECT_PREFIX):
+        return True
+    if not account:
+        return False
+    _, address = email.utils.parseaddr(str(item.get("from") or ""))
+    return address.strip().lower() == account.strip().lower()
+
+
 def scan_payload(account: str, recent_days: int, limit: int, raw_count: int, items: list[dict[str, Any]]) -> dict[str, Any]:
+    kept = [item for item in items if not is_self_mail(item, account)]
+    dropped = len(items) - len(kept)
+    if dropped:
+        # 不打日志的话，「今天怎么只有 3 封」会变成一个查不出来的问题。
+        log(f"Dropped {dropped} Podsum-authored message(s) from the scan.")
+    items = kept
     return {
         "object_type": "email_evidence_pack",
         "object_version": EVIDENCE_PACK_VERSION,
@@ -1644,6 +1669,7 @@ def scan_payload(account: str, recent_days: int, limit: int, raw_count: int, ite
         "scan_limit": limit,
         "raw_count": raw_count,
         "possibly_truncated": raw_count >= limit,
+        "dropped_self_count": dropped,
         "items": items,
     }
 
