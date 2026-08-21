@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import shlex
+import re
 import subprocess
 import sys
 import textwrap
@@ -17,6 +18,7 @@ from typing import Any, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 EMAIL_SUMMARY_PROMPT = ROOT / "outputs" / "email_summary_prompt.md"
+OUTPUTS_README = ROOT / "outputs" / "README.md"
 PODSUM = ROOT / "outputs" / "podsum.py"
 sys.path.insert(0, str(ROOT / "outputs"))
 import podsum  # noqa: E402
@@ -4480,18 +4482,28 @@ class LlmBriefTest(unittest.TestCase):
 class EditableFilesDocTest(unittest.TestCase):
     """文档写死的链接上限必须跟代码一致，否则读者按文档调完发现没生效。"""
 
+    HEADING = "## Editable Email Summary Files"
+
+    def _section(self) -> str:
+        readme = OUTPUTS_README.read_text(encoding="utf-8")
+        self.assertIn(self.HEADING, readme)
+        return readme.split(self.HEADING, 1)[1].split("\n## ", 1)[0]
+
+    @staticmethod
+    def _tracked(path: str) -> str:
+        return subprocess.run(
+            ["git", "ls-files", path], cwd=str(ROOT), text=True, capture_output=True
+        ).stdout
+
     def test_documented_link_limits_match_the_default_policy(self) -> None:
-        readme = (ROOT / "outputs" / "README.md").read_text(encoding="utf-8")
+        section = self._section()
         limits = email_summary.DEFAULT_POLICY["limits"]
 
-        self.assertIn("## Editable Email Summary Files", readme)
-        section = readme.split("## Editable Email Summary Files", 1)[1].split("\n## ", 1)[0]
         self.assertIn(f"{limits['max_links_per_email']} links per email", section)
         self.assertIn(f"{limits['max_links_total']} links in total", section)
 
     def test_the_three_editable_files_are_all_named(self) -> None:
-        readme = (ROOT / "outputs" / "README.md").read_text(encoding="utf-8")
-        section = readme.split("## Editable Email Summary Files", 1)[1].split("\n## ", 1)[0]
+        section = self._section()
 
         for name in ("email_summary_prompt.md", "topic.md", "email_link_policy.md"):
             with self.subTest(name=name):
@@ -4502,9 +4514,17 @@ class EditableFilesDocTest(unittest.TestCase):
         for user_file in ("topic.md", "email_link_policy.md"):
             with self.subTest(user_file=user_file):
                 self.assertTrue((ROOT / "outputs" / f"{user_file}.example").exists())
-                self.assertNotIn(f"outputs/{user_file}", subprocess.run(
-                    ["git", "ls-files", f"outputs/{user_file}"], cwd=str(ROOT), text=True, capture_output=True
-                ).stdout, "用户文件不该入库，否则同步会盖掉界面上的编辑")
+                self.assertEqual(self._tracked(f"outputs/{user_file}"), "", "用户文件不该入库，否则同步会盖掉界面上的编辑")
+
+    def test_every_flag_the_section_documents_really_exists(self) -> None:
+        """flag 改名而 README 不动，读者照着敲只会得到 argparse 报错。"""
+        documented = sorted(set(re.findall(r"--[a-z][a-z0-9-]+", self._section())))
+        help_text = run_podsum("email-summary", "--help").stdout
+
+        self.assertTrue(documented, "这一节本来就该给出可照抄的命令")
+        for flag in documented:
+            with self.subTest(flag=flag):
+                self.assertIn(flag, help_text)
 
 
 if __name__ == "__main__":
