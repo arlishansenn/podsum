@@ -2792,7 +2792,7 @@ def send_report(args: argparse.Namespace, report_path: Path, scan: dict[str, Any
     return epub_path
 
 
-def run(args: argparse.Namespace) -> tuple[Path, Path, Path | None]:
+def run(args: argparse.Namespace) -> tuple[Path, Path | None, Path | None]:
     policy = load_link_policy(args.email_link_policy)
     topic_map = load_topic_map(args.email_topic_file)
     summary_engine = getattr(args, "summary_engine", DEFAULT_SUMMARY_ENGINE)
@@ -2811,15 +2811,14 @@ def run(args: argparse.Namespace) -> tuple[Path, Path, Path | None]:
         scan = scan_imap(args, policy)
         scan_path = None
 
-    # 收件箱被清空的那天没有任何证据可写。继续往下走会写出一份空 brief，
-    # 再被 review_checklist 判为不合格并抛错——那不是失败，是无事发生。
-    # 判空必须在写文件之前：写过之后就已经覆盖掉当天那份好的 summary 了。
+    # 收件箱被清空的那天没有证据可写。空 brief 会被 review_checklist 判为不合格并
+    # 抛错——那不是失败，是无事发生。判空必须在写文件之前：写过就已经覆盖掉当天
+    # 那份好的 summary 了。scan 记录照写，那是「今天确实跑过、确实没邮件」的凭据。
     source_scan = scan if scan is not None else _read_scan_file(scan_path)
     if not source_scan.get("items"):
-        # scan 记录照写：那是「今天确实跑过、确实没邮件」的凭据。
-        # 但 brief 不写——写了就覆盖掉当天那份好的，而空 brief 还会被
-        # review_checklist 判为不合格并抛错。那不是失败，是无事发生。
-        empty_pack = evidence_agent.build_evidence_pack(source_scan, policy, topic_map, False, fetch_link_context).to_dict()
+        empty_pack = evidence_agent.build_evidence_pack(
+            source_scan, policy, topic_map, enrich_links=False, fetcher=fetch_link_context
+        ).to_dict()
         log("no mail in window; skip brief")
         return write_scan(args.output, empty_pack), None, None
 
@@ -2933,22 +2932,32 @@ def normalize_args(args: argparse.Namespace) -> None:
         raise SystemExit("--hermes-timeout must be >= 1")
 
 
-def main() -> int:
-    parser = build_parser()
-    args = parser.parse_args()
-    normalize_args(args)
+def run_and_report(args: argparse.Namespace) -> int:
+    """跑一次 email summary，并把产出报给用户。
+
+    两个入口（podsum.py 的子命令和本模块的 main）共用这一段。分开写过一次，代价是
+    加一行日志要记得改两处：空扫描日的守卫就差点只落在其中一边。
+    """
     try:
         scan_path, report_path, epub_path = run(args)
     except Exception as exc:
         log(f"Email summary failed: {error_text(exc)}")
         return 1
     if report_path is None:
+        # 空扫描日只写了 scan。没写 brief 就不许说写了，否则日志里会出现一个
+        # 不存在的路径。
         return 0
     log(f"Wrote email scan: {scan_path}")
     log(f"Wrote email summary: {report_path}")
     if epub_path:
         log(f"Wrote email summary EPUB: {epub_path}")
     return 0
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    normalize_args(args)
+    return run_and_report(args)
 
 
 if __name__ == "__main__":

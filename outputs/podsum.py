@@ -543,18 +543,7 @@ def email_summary_args_from_podsum(args: argparse.Namespace) -> argparse.Namespa
 
 def run_email_summary(args: argparse.Namespace) -> int:
     email_summary.normalize_args(args)
-    try:
-        scan_path, report_path, epub_path = email_summary.run(args)
-    except Exception as exc:
-        log(f"Email summary failed: {email_summary.error_text(exc)}")
-        return 1
-    if report_path is None:
-        return 0
-    log(f"Wrote email scan: {scan_path}")
-    log(f"Wrote email summary: {report_path}")
-    if epub_path:
-        log(f"Wrote email summary EPUB: {epub_path}")
-    return 0
+    return email_summary.run_and_report(args)
 
 
 def email_summary_command(args: argparse.Namespace) -> int:
