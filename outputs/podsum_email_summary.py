@@ -2707,7 +2707,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--enrich-links", action="store_true")
     parser.add_argument("--project-dir", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--target", default=DEFAULT_TARGET)
-    parser.add_argument("--delivery", choices=("hermes", "email"), default=DEFAULT_DELIVERY)
+    parser.add_argument("--delivery", choices=("hermes", "email"), default="")
     parser.add_argument("--smtp-host", default="")
     parser.add_argument("--smtp-port", type=int, default=0)
     parser.add_argument("--smtp-user", default="")
@@ -2739,7 +2739,9 @@ def normalize_args(args: argparse.Namespace) -> None:
     args.email_topic_file = args.email_topic_file.expanduser()
     args.project_dir = args.project_dir.expanduser()
     args.hermes = args.hermes.expanduser()
-    args.delivery = getattr(args, "delivery", DEFAULT_DELIVERY)
+    args.delivery = podsum_runtime.resolve_delivery(
+        getattr(args, "delivery", "") or "", podsum_runtime.load_env_file(args.env_file)
+    )
     if args.smtp_port < 0:
         raise SystemExit("--smtp-port must be >= 0")
     if args.smtp_timeout < 0:

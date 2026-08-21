@@ -8,6 +8,9 @@ from pathlib import Path
 PODSUM_PYTHON_ENV = "PODSUM_PYTHON"
 PODSUM_HOME_ENV = "PODSUM_HOME"
 PODSUM_TARGET_ENV = "PODSUM_TARGET"
+PODSUM_DELIVERY_ENV = "PODSUM_EMAIL_DELIVERY"
+PODSUM_EMAIL_SUMMARY_ENV = "PODSUM_EMAIL_SUMMARY"
+DEFAULT_DELIVERY = "hermes"
 APP_DIR_NAME = "Podsum"
 
 
@@ -94,6 +97,15 @@ def parse_bool(value: str, default: bool) -> bool:
     if not value:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def resolve_delivery(cli_value: str, env_file: dict[str, str]) -> str:
+    """邮件投递方式：CLI > 进程环境变量 > .env，回落到 hermes。
+
+    CLI 默认值必须是空串。给它一个非空默认值，会让 `args.x or config_value(...)`
+    的右边永远不执行——和 --target 踩过的是同一个坑。
+    """
+    return cli_value or config_value(env_file, PODSUM_DELIVERY_ENV, default=DEFAULT_DELIVERY)
 
 
 def resolve_target(cli_value: str, env_file: dict[str, str], env_path: Path) -> str:

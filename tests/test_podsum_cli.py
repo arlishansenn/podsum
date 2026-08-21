@@ -4026,6 +4026,67 @@ class PodsumCliTest(unittest.TestCase):
             self.assertIn("2026-08-21", sent["subject"])
             self.assertIn("<html>", sent["html_body"])
 
+    def test_delivery_cli_defaults_are_empty_on_every_entrypoint(self) -> None:
+        """--delivery 默认值非空会踩和 --target 同一个坑：config 那一档永远读不到。"""
+        def delivery_defaults(parser: argparse.ArgumentParser) -> list[Any]:
+            found = [
+                a.default
+                for a in parser._actions
+                if {"--delivery", "--email-delivery"} & set(a.option_strings)
+            ]
+            for action in parser._actions:
+                choices = getattr(action, "choices", None)
+                if isinstance(choices, dict):
+                    for sub in choices.values():
+                        found.extend(delivery_defaults(sub))
+            return found
+
+        for parser in (podsum.build_parser(), email_summary.build_parser()):
+            defaults = delivery_defaults(parser)
+            self.assertTrue(defaults, "entrypoint is missing --delivery")
+            for default in defaults:
+                self.assertEqual(default, "")
+
+    def test_resolve_delivery_prefers_cli_then_env_then_env_file_then_hermes(self) -> None:
+        env_file = {"PODSUM_EMAIL_DELIVERY": "email"}
+        self.assertEqual(podsum_runtime.resolve_delivery("hermes", env_file), "hermes")
+        self.assertEqual(podsum_runtime.resolve_delivery("", env_file), "email")
+        self.assertEqual(podsum_runtime.resolve_delivery("", {}), "hermes")
+
+        real = os.environ.get("PODSUM_EMAIL_DELIVERY")
+        os.environ["PODSUM_EMAIL_DELIVERY"] = "email"
+        try:
+            self.assertEqual(podsum_runtime.resolve_delivery("", {}), "email")
+            self.assertEqual(podsum_runtime.resolve_delivery("hermes", {}), "hermes")
+        finally:
+            if real is None:
+                del os.environ["PODSUM_EMAIL_DELIVERY"]
+            else:
+                os.environ["PODSUM_EMAIL_DELIVERY"] = real
+
+    def test_email_summary_switch_can_be_turned_on_from_env_file(self) -> None:
+        """邮件摘要开关移出 plist：.env 里打开也算数，CLI 给了就无条件生效。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text("PODSUM_EMAIL_SUMMARY=true\n", encoding="utf-8")
+            args = argparse.Namespace(email_summary=False, email_env_file=env_file)
+            self.assertTrue(podsum.email_summary_requested(args))
+
+            env_file.write_text("PODSUM_EMAIL_SUMMARY=false\n", encoding="utf-8")
+            self.assertFalse(podsum.email_summary_requested(args))
+            self.assertTrue(
+                podsum.email_summary_requested(
+                    argparse.Namespace(email_summary=True, email_env_file=env_file)
+                )
+            )
+
+            missing = Path(tmp) / "nope.env"
+            self.assertFalse(
+                podsum.email_summary_requested(
+                    argparse.Namespace(email_summary=False, email_env_file=missing)
+                )
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
