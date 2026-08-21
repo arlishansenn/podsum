@@ -124,37 +124,68 @@ class EmailSummaryPromptTest(unittest.TestCase):
     测试里的时候，改 prompt 的人找不到它们。
     """
 
-    def test_email_summary_prompt_matches_deep_interpretation_style(self) -> None:
+    def test_prompt_asks_for_an_analyst_voice_without_internal_jargon(self) -> None:
+        """既有契约：brief 是读完邮件后的判断，正文不许出现处理流程和对象名。"""
         prompt = email_summary_prompt_text()
 
         self.assertIn("邮件情报助理", prompt)
         self.assertIn("不要复述字段名或数据结构", prompt)
         self.assertIn("正文不要出现 JSON、字段", prompt)
+        self.assertNotIn("对象: EmailIntelBrief", prompt)
+        self.assertNotIn("来源对象: EmailEvidencePack", prompt)
+        self.assertNotIn("处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief", prompt)
+        self.assertNotIn("EmailEvidencePack", prompt)
+
+    def test_prompt_prefers_omission_over_filler(self) -> None:
+        """没有实质发现就整段省略，不许用「今天没有……」凑段落。"""
+        prompt = email_summary_prompt_text()
+
         self.assertIn("只写有实质证据的发现", prompt)
         self.assertIn("整段省略", prompt)
         self.assertIn("直接省略", prompt)
         self.assertIn("连小节标题一起省略", prompt)
         self.assertNotIn("可以忽略什么", prompt)
+
+    def test_prompt_requires_sources_inline_not_in_a_trailing_index(self) -> None:
+        """来源集中到末尾，读者就得在正文和索引之间来回跳。"""
+        prompt = email_summary_prompt_text()
+
         self.assertIn("必须把来源嵌在正文对应内容里", prompt)
         self.assertIn("[UID 1001](email://2026-07-05/1001)", prompt)
+        self.assertIn("不要把来源集中放到末尾", prompt)
         self.assertNotIn("## 来源索引", prompt)
+
+    def test_prompt_pins_the_brief_section_skeleton(self) -> None:
+        """review_checklist 按 `## 今天先看` 判 brief 是否成形，标题不能随手改。"""
+        prompt = email_summary_prompt_text()
+
         self.assertIn("# Morning Brief - {date}", prompt)
-        self.assertIn("## 今天先看", prompt)
-        self.assertIn("## 需要处理", prompt)
-        self.assertIn("## 情报线索", prompt)
-        self.assertIn("## 证据边界", prompt)
-        self.assertNotIn("对象: EmailIntelBrief", prompt)
-        self.assertNotIn("来源对象: EmailEvidencePack", prompt)
-        self.assertNotIn("处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief", prompt)
-        self.assertIn("合并重复、营销、低信号邮件", prompt)
-        self.assertIn("digest 类邮件例外", prompt)
-        self.assertIn("跟踪话题提示", prompt)
-        self.assertNotIn("EmailEvidencePack", prompt)
+        for heading in ("## 今天先看", "## 需要处理", "## 情报线索", "## 证据边界"):
+            with self.subTest(heading=heading):
+                self.assertIn(heading, prompt)
+
+    def test_prompt_states_how_evidence_may_be_used(self) -> None:
+        """邮件片段不是正文，扫描可能触达上限——这些边界必须写在 prompt 里。"""
+        prompt = email_summary_prompt_text()
+
         self.assertIn("邮件片段不是完整正文", prompt)
         self.assertIn("已抓取公开网页证据优先", prompt)
         self.assertIn("证据边界可以自然写成", prompt)
-        self.assertIn("不要把来源集中放到末尾", prompt)
         self.assertIn("触达上限，可能有遗漏", prompt)
+        self.assertIn("跟踪话题提示", prompt)
+        self.assertIn("合并重复、营销、低信号邮件", prompt)
+        self.assertIn("digest 类邮件例外", prompt)
+
+    def test_email_summary_prompt_forbids_packing_items_onto_one_line(self) -> None:
+        """真实运行里 LLM 把 19 条快讯写进了同一行：链接还能点，列表结构没了。
+
+        「每个子条目一行」被读成了排版建议，所以这里要一条硬约束，明写禁止什么。
+        """
+        prompt = email_summary_prompt_text()
+
+        self.assertIn("独占一行", prompt)
+        self.assertIn("换行分隔", prompt)
+        self.assertIn("禁止把多个条目写进同一行", prompt)
 
     def test_email_summary_prompt_requires_digest_items_to_be_expanded(self) -> None:
         """digest 类邮件本身没有内容，它的内容就是那张链接列表——压成一行等于丢掉全部信息。"""
@@ -3093,6 +3124,37 @@ class PodsumCliTest(unittest.TestCase):
         self.assertNotIn("defer:unmapped_topic", compact_json)
         self.assertNotIn("skipped", compact_json)
 
+    def test_empty_scan_day_is_a_quiet_no_op_not_a_failure(self) -> None:
+        """收件箱被清空的那天：不报错、不发送、不覆盖当天已有的 summary。
+
+        review_checklist 无条件要求 key takeaway 与来源溯源，空日必假，
+        send_report 会当场抛 RuntimeError。判空必须在写文件之前，不能等 checklist 兜。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            reports = tmp_path / "downloads" / "EmailReports"
+            reports.mkdir(parents=True)
+            existing = reports / "email-summary-2026-07-05.md"
+            existing.write_text("# 昨天写好的 brief\n", encoding="utf-8")
+
+            # 刻意不带 --no-send / --dry-run：真实那天走的就是这条路
+            result = run_podsum(
+                "email-summary",
+                "--scan-file",
+                str(ROOT / "tests" / "fixtures" / "email_summary_scans" / "email-scan-empty.json"),
+                "--output",
+                str(tmp_path / "downloads"),
+            )
+
+            output = result.stdout + result.stderr
+            self.assertEqual(result.returncode, 0, output)
+            self.assertNotIn("RuntimeError", output)
+            self.assertNotIn("failed Review Checklist", output)
+            self.assertIn("no mail in window", output)
+            self.assertEqual(existing.read_text(encoding="utf-8"), "# 昨天写好的 brief\n")
+            # 没写就不许说写了：日志里出现一个不存在的路径，正是这类静默谎报
+            self.assertNotIn("Wrote email summary", output)
+
     def test_email_summary_uses_empty_scan_file_without_real_imap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -3112,7 +3174,9 @@ class PodsumCliTest(unittest.TestCase):
             scan = json.loads(copied_scan.read_text(encoding="utf-8"))
             self.assertEqual(scan["raw_count"], 0)
             self.assertEqual(scan["items"], [])
-            self.assertIn("# Morning Brief - 2026-07-05", report.read_text(encoding="utf-8"))
+            # 空日不写 brief：写了就覆盖当天那份好的，而空 brief 还过不了 review checklist
+            self.assertFalse(report.exists())
+            self.assertIn("no mail in window", result.stdout + result.stderr)
 
     def test_email_summary_uses_truncated_scan_file_without_real_imap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
