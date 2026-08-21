@@ -3207,6 +3207,10 @@ class PodsumCliTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             send_args = hermes_args.read_text(encoding="utf-8")
             self.assertIn("[Podsum] 2026-07-05 Email Summary", send_args)
+            self.assertTrue(
+                any(email_summary.is_self_mail({"subject": line}, "") for line in send_args.splitlines()),
+                "发出去的主题必须被扫描端的自发邮件判据认出来，否则 brief 会把自己读回来",
+            )
             self.assertIn("Podsum Email Summary 2026-07-05", send_args)
             self.assertNotIn("文字稿", send_args)
 
@@ -4033,6 +4037,10 @@ class PodsumCliTest(unittest.TestCase):
             self.assertEqual(sent["recipients"], ["to@x.com"])
             self.assertEqual(sent["host"], "smtp.example.com")
             self.assertIn("2026-08-21", sent["subject"])
+            self.assertTrue(
+                email_summary.is_self_mail({"subject": sent["subject"]}, ""),
+                "投递目标就是被扫描的邮箱，主题必须被扫描端认成自发邮件，否则 brief 会把自己读回来",
+            )
             self.assertIn("<html>", sent["html_body"])
 
     def test_delivery_cli_defaults_are_empty_on_every_entrypoint(self) -> None:

@@ -63,6 +63,7 @@ DEFAULT_MAILBOX = "INBOX"
 DEFAULT_RECENT_DAYS = 1
 DEFAULT_LIMIT = 300
 DEFAULT_FIXTURE_ACCOUNT = "fixture@example.invalid"
+SELF_SUBJECT_PREFIX = "[Podsum]"
 EVIDENCE_PACK_VERSION = "0.1"
 INTEL_BRIEF_VERSION = "0.1"
 SNIPPET_CHARS = 240
@@ -1633,9 +1634,6 @@ def scan_eml_dir(args: argparse.Namespace, policy: dict[str, Any]) -> dict[str, 
     return scan_payload(DEFAULT_FIXTURE_ACCOUNT, args.recent_days, args.limit, raw_count, items)
 
 
-SELF_SUBJECT_PREFIX = "[Podsum]"
-
-
 def is_self_mail(item: dict[str, Any], account: str) -> bool:
     """Podsum 自己发出去的邮件。
 
@@ -1650,6 +1648,15 @@ def is_self_mail(item: dict[str, Any], account: str) -> bool:
         return False
     _, address = email.utils.parseaddr(str(item.get("from") or ""))
     return address.strip().lower() == account.strip().lower()
+
+
+def podsum_subject(date: str, kind: str) -> str:
+    """Podsum 自己发出去的邮件主题。
+
+    和 is_self_mail 的主题判据同源：发件主题在别处硬编码的话，改了发件端而扫描端
+    不动，自发邮件过滤会静默失效，brief 又开始把自己读回来。
+    """
+    return f"{SELF_SUBJECT_PREFIX} {date} {kind}"
 
 
 def scan_payload(account: str, recent_days: int, limit: int, raw_count: int, items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2599,7 +2606,7 @@ def send_report(args: argparse.Namespace, report_path: Path, scan: dict[str, Any
     delivery = getattr(args, "delivery", DEFAULT_DELIVERY)
     if delivery == "email":
         config = smtp_config(args)
-        subject = f"[Podsum] {scan['date']} Email Brief"
+        subject = podsum_subject(scan["date"], "Email Brief")
         body = (
             f"Podsum Email Brief {scan['date']}\n\n"
             f"账号: {scan.get('account', '')}\n"
@@ -2644,7 +2651,7 @@ def send_report(args: argparse.Namespace, report_path: Path, scan: dict[str, Any
         f"生成时间: {time.strftime('%Y-%m-%d %H:%M:%S %z')}\n\n"
         f"MEDIA:{epub_path}"
     )
-    subject = f"[Podsum] {scan['date']} Email Summary"
+    subject = podsum_subject(scan["date"], "Email Summary")
     if args.dry_run:
         log(f"would send email summary: {epub_path}")
     else:
