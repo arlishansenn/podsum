@@ -163,9 +163,9 @@ ensure_env_file() {
 install_venv() {
   local venv="$PODSUM_HOME/.venv"
   [ -d "$venv" ] || python3 -m venv "$venv"
-  "$venv/bin/pip" install --quiet --group "$PROJECT_ROOT/pyproject.toml:runtime"
+  "$venv/bin/pip" install --quiet --disable-pip-version-check --group "$PROJECT_ROOT/pyproject.toml:runtime"
   if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
-    "$venv/bin/pip" install --quiet --group "$PROJECT_ROOT/pyproject.toml:transcribe"
+    "$venv/bin/pip" install --quiet --disable-pip-version-check --group "$PROJECT_ROOT/pyproject.toml:transcribe"
   fi
   echo "venv ready: $venv"
 }
