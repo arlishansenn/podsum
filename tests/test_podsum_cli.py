@@ -4194,16 +4194,22 @@ class PodsumCliTest(unittest.TestCase):
         payload = email_summary.scan_payload("", 1, 20, len(items), list(items))
         self.assertEqual([item["uid"] for item in payload["items"]], ["1"])
 
+
 class DigestRenderingTest(unittest.TestCase):
     """digest 类邮件自己没有内容，内容就是那张链接列表。压成一行等于全部丢掉。"""
 
     @staticmethod
-    def _alert(uid: str, date: str, links: list[tuple[str, str, str]]) -> dict[str, object]:
+    def _alert(
+        uid: str,
+        date: str,
+        links: list[tuple[str, str, str]],
+        subject: str = "Google快讯 - RWA",
+    ) -> dict[str, object]:
         return {
             "uid": uid,
             "date": date,
             "from": "Google Alerts <googlealerts-noreply@google.com>",
-            "subject": "Google快讯 - RWA",
+            "subject": subject,
             "snippet": "RWA 相关的新报道",
             "email_type": "google_alert",
             "has_attachments": False,
@@ -4223,27 +4229,32 @@ class DigestRenderingTest(unittest.TestCase):
             "topics": [],
         }
 
+    @staticmethod
+    def _render_scan(*items: dict[str, object]) -> str:
+        return email_summary.build_intel_brief_draft(
+            {
+                "date": "2026-08-21",
+                "account": "fixture@example.invalid",
+                "window": "2d",
+                "scan_limit": 20,
+                "raw_count": len(items),
+                "possibly_truncated": False,
+                "items": list(items),
+            }
+        )
+
     def _render(self) -> str:
         shared = ("RWA 在 DeFi 活跃资金逼近 40 亿美元", "https://example.invalid/rwa-defi", "据 DefiLlama 数据，规模升至约 39.8 亿美元。")
-        scan = {
-            "date": "2026-08-21",
-            "account": "fixture@example.invalid",
-            "window": "2d",
-            "scan_limit": 20,
-            "raw_count": 2,
-            "possibly_truncated": False,
-            "items": [
-                self._alert("1329", "Wed, 19 Aug 2026 08:00:00 +0800", [
-                    shared,
-                    ("OneLife 链上全球购落地", "https://example.invalid/onelife", "RWA 从金融资产代币化迈向实体经济。"),
-                ]),
-                self._alert("1335", "Thu, 20 Aug 2026 08:00:00 +0800", [
-                    shared,
-                    ("X Layer 推 RWA 流动性激励", "https://example.invalid/xlayer", "总激励规模达 500 万美元。"),
-                ]),
-            ],
-        }
-        return email_summary.build_intel_brief_draft(scan)
+        return self._render_scan(
+            self._alert("1329", "Wed, 19 Aug 2026 08:00:00 +0800", [
+                shared,
+                ("OneLife 链上全球购落地", "https://example.invalid/onelife", "RWA 从金融资产代币化迈向实体经济。"),
+            ]),
+            self._alert("1335", "Thu, 20 Aug 2026 08:00:00 +0800", [
+                shared,
+                ("X Layer 推 RWA 流动性激励", "https://example.invalid/xlayer", "总激励规模达 500 万美元。"),
+            ]),
+        )
 
     def test_same_subject_digests_merge_into_one_deduped_list(self) -> None:
         markdown = self._render()
@@ -4281,6 +4292,43 @@ class DigestRenderingTest(unittest.TestCase):
         # policy_decision 全是 pending：指向来源本身就是它的用途，不是未验证论断
         self.assertIn("](https://example.invalid/rwa-defi)", markdown)
 
+    def test_different_subjects_stay_in_separate_lists(self) -> None:
+        """不同快讯倒进同一张列表，读者就分不清哪条来自哪份订阅。"""
+        markdown = self._render_scan(
+            self._alert("1400", "Thu, 20 Aug 2026 08:00:00 +0800", [
+                ("RWA 条目", "https://example.invalid/rwa", "一"),
+            ]),
+            self._alert("1401", "Thu, 20 Aug 2026 09:00:00 +0800", [
+                ("稳定币条目", "https://example.invalid/stable", "二"),
+            ], subject="Google快讯 - 稳定币"),
+        )
+
+        section = markdown.split("## 订阅摘要")[1]
+        self.assertIn("### Google快讯 - RWA", section)
+        self.assertIn("### Google快讯 - 稳定币", section)
+
+    def test_bare_links_render_without_empty_titles_or_dangling_dashes(self) -> None:
+        """anchor_text 缺失时标题退回 url；没有 context 时不留一条空破折号尾巴。"""
+        markdown = self._render_scan(
+            self._alert("1402", "Thu, 20 Aug 2026 08:00:00 +0800", [
+                ("", "https://example.invalid/bare", ""),
+            ]),
+        )
+
+        section = markdown.split("## 订阅摘要")[1]
+        self.assertIn("- [https://example.invalid/bare](https://example.invalid/bare)", section)
+        self.assertNotIn("—", section)
+
+    def test_malformed_links_are_skipped_instead_of_rendered(self) -> None:
+        """扫描产物不保证每个 link 都是带地址的 dict，渲染不能因此崩掉或输出空链接。"""
+        item = self._alert("1403", "Thu, 20 Aug 2026 08:00:00 +0800", [
+            ("有效条目", "https://example.invalid/ok", "正常"),
+        ])
+        item["links"] = ["not-a-dict", {"anchor_text": "空地址", "normalized_url": "   "}] + list(item["links"])
+
+        section = self._render_scan(item).split("## 订阅摘要")[1]
+        self.assertIn("](https://example.invalid/ok)", section)
+        self.assertNotIn("空地址", section)
 
 class LlmBriefTest(unittest.TestCase):
     """podsum 引擎的 brief 必须由 LLM 写；模板是失败时的兜底，不是常态。"""

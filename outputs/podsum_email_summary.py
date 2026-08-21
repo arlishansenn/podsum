@@ -2345,35 +2345,53 @@ def merge_digest_groups(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]
     按邮件主题判重会整封丢弃：相邻两天的同名快讯里，只在其中一封出现的条目会
     彻底消失。去重键必须是链接地址。
     """
-    groups: dict[str, dict[str, Any]] = {}
-    seen: dict[str, set[str]] = {}
+    # 按 url 建索引，去重键就是索引键本身，不需要第二张表跟着 groups 一起维护。
+    by_url: dict[str, dict[str, dict[str, str]]] = {}
+    sources: dict[str, list[dict[str, Any]]] = {}
     for item in sorted(items, key=lambda value: str(value.get("date") or "")):
         subject = clean_text(str(item.get("subject") or ""), 90) or "订阅摘要"
-        group = groups.setdefault(subject, {"links": [], "items": []})
-        group["items"].append(item)
-        bucket = group["links"]
-        known = seen.setdefault(subject, set())
+        sources.setdefault(subject, []).append(item)
+        links = by_url.setdefault(subject, {})
         for link in item.get("links") or []:
             if not isinstance(link, dict):
                 continue
             url = str(link.get("normalized_url") or link.get("url") or "").strip()
-            if not url or url in known:
+            if not url or url in links:
                 continue
-            known.add(url)
-            bucket.append(
-                {
-                    "url": url,
-                    "title": clean_text(str(link.get("anchor_text") or "").strip(), 90) or url,
-                    "context": clean_text(str(link.get("context") or "").strip(), 110),
-                }
-            )
-    return {subject: group for subject, group in groups.items() if group["links"]}
+            links[url] = {
+                "url": url,
+                "title": clean_text(str(link.get("anchor_text") or "").strip(), 90) or url,
+                "context": clean_text(str(link.get("context") or "").strip(), 110),
+            }
+    return {
+        subject: {"items": sources[subject], "links": list(links.values())}
+        for subject, links in by_url.items()
+        if links
+    }
 
 
 def digest_link_line(link: dict[str, str]) -> str:
     """一条链接一行：标题是点击目标，后面压一行摘要，只扫列表就能决定点不点开。"""
     line = f"- [{link['title']}]({link['url']})"
     return f"{line} — {link['context']}" if link["context"] else line
+
+
+def digest_section_lines(scan: dict[str, Any], items: list[dict[str, Any]]) -> list[str]:
+    """digest 自己的展示区。空列表表示没有可展示的 digest，调用方据此整节省略。"""
+    groups = merge_digest_groups(items)
+    if not groups:
+        return []
+    lines = ["", "## 订阅摘要", ""]
+    for subject, group in groups.items():
+        # 合并去重之后仍要能追回是哪几封邮件带来的，否则 digest 区没有溯源。
+        sources = " ".join(source_markdown_link(scan, item) for item in group["items"])
+        lines.append(f"### {subject}")
+        lines.append(f"来源：{sources}")
+        lines.extend(digest_link_line(link) for link in group["links"])
+        lines.append("")
+    if lines[-1] == "":
+        lines.pop()
+    return lines
 
 
 def build_intel_brief_draft(scan: dict[str, Any], reason: str = "", *, notice: str = "") -> str:
@@ -2439,18 +2457,9 @@ def build_intel_brief_draft(scan: dict[str, Any], reason: str = "", *, notice: s
             lines.append(delivery_item_line(scan, item, "可稍后看"))
             displayed.append(item)
 
-    digest_groups = merge_digest_groups(digest_items)
-    if digest_groups:
-        lines.extend(["", "## 订阅摘要", ""])
-        for subject, group in digest_groups.items():
-            # 合并去重之后仍要能追回是哪几封邮件带来的，否则 digest 区没有溯源。
-            sources = " ".join(source_markdown_link(scan, item) for item in group["items"])
-            lines.append(f"### {subject}")
-            lines.append(f"来源：{sources}")
-            lines.extend(digest_link_line(link) for link in group["links"])
-            lines.append("")
-        if lines[-1] == "":
-            lines.pop()
+    digest_lines = digest_section_lines(scan, digest_items)
+    if digest_lines:
+        lines.extend(digest_lines)
         displayed.extend(digest_items)
 
     boundaries = delivery_evidence_boundary(scan, displayed)
