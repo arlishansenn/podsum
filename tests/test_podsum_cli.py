@@ -156,6 +156,17 @@ class EmailSummaryPromptTest(unittest.TestCase):
         self.assertIn("不要把来源集中放到末尾", prompt)
         self.assertIn("触达上限，可能有遗漏", prompt)
 
+    def test_email_summary_prompt_forbids_packing_items_onto_one_line(self) -> None:
+        """真实运行里 LLM 把 19 条快讯写进了同一行：链接还能点，列表结构没了。
+
+        「每个子条目一行」被读成了排版建议，所以这里要一条硬约束，明写禁止什么。
+        """
+        prompt = email_summary_prompt_text()
+
+        self.assertIn("独占一行", prompt)
+        self.assertIn("换行分隔", prompt)
+        self.assertIn("禁止把多个条目写进同一行", prompt)
+
     def test_email_summary_prompt_requires_digest_items_to_be_expanded(self) -> None:
         """digest 类邮件本身没有内容，它的内容就是那张链接列表——压成一行等于丢掉全部信息。"""
         prompt = email_summary_prompt_text()
