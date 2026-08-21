@@ -41,6 +41,49 @@ scripts/install.sh
 
 跳过某一步：`--skip-venv`、`--skip-node`、`--skip-launchd`。
 
+## 手动触发
+
+定时任务每天 08:00 跑。不想等就用下面三档，按影响面从小到大。
+
+先设解释器：
+
+```bash
+export PODSUM_PYTHON="$HOME/Library/Application Support/Podsum/.venv/bin/python"
+export PODSUM_OUTPUTS="$HOME/Library/Application Support/Podsum/outputs"
+```
+
+**只看会发什么，不发信**。仍然会读真实邮箱，所以 `--allow-imap-read` 省不掉：
+
+```bash
+"$PODSUM_PYTHON" "$PODSUM_OUTPUTS/podsum.py" \
+  email-summary --allow-imap-read --recent-days 1 --limit 20 --dry-run
+```
+
+打印 `would email HTML summary to <收件人>: <路径>`，Markdown 落在
+`~/Podcasts/AutoDownloads/EmailReports/`，可以先读那份再决定。
+
+**真发一封**，去掉 `--dry-run`：
+
+```bash
+"$PODSUM_PYTHON" "$PODSUM_OUTPUTS/podsum.py" \
+  email-summary --allow-imap-read --recent-days 1 --limit 20
+```
+
+**完整跑一次定时任务**，与 08:00 逐字相同（含下载、转写、投递、清理）。会真的跑转写，
+可能几十分钟：
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.local.podsum
+tail -f ~/Library/Logs/podsum.log
+```
+
+`--allow-imap-read` 是刻意留在命令行、没有移进 `.env` 的确认：它的价值就在于每个要读
+真实邮箱的地方都必须显式写一次。
+
+`--email-delivery email` 时的 SMTP 配置全部有推断兜底——host 从 IMAP host 推，收发地址
+和密码回落到 IMAP 那一套。发信被拒多半是这里，在 `.env` 里单独设
+`PODSUM_EMAIL_SMTP_PASS` 即可。
+
 ## 解读规则
 
 `outputs/interpretation_rules.md` 的内容注入
