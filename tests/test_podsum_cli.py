@@ -124,37 +124,57 @@ class EmailSummaryPromptTest(unittest.TestCase):
     测试里的时候，改 prompt 的人找不到它们。
     """
 
-    def test_email_summary_prompt_matches_deep_interpretation_style(self) -> None:
+    def test_prompt_asks_for_an_analyst_voice_without_internal_jargon(self) -> None:
+        """既有契约：brief 是读完邮件后的判断，正文不许出现处理流程和对象名。"""
         prompt = email_summary_prompt_text()
 
         self.assertIn("邮件情报助理", prompt)
         self.assertIn("不要复述字段名或数据结构", prompt)
         self.assertIn("正文不要出现 JSON、字段", prompt)
+        self.assertNotIn("对象: EmailIntelBrief", prompt)
+        self.assertNotIn("来源对象: EmailEvidencePack", prompt)
+        self.assertNotIn("处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief", prompt)
+        self.assertNotIn("EmailEvidencePack", prompt)
+
+    def test_prompt_prefers_omission_over_filler(self) -> None:
+        """没有实质发现就整段省略，不许用「今天没有……」凑段落。"""
+        prompt = email_summary_prompt_text()
+
         self.assertIn("只写有实质证据的发现", prompt)
         self.assertIn("整段省略", prompt)
         self.assertIn("直接省略", prompt)
         self.assertIn("连小节标题一起省略", prompt)
         self.assertNotIn("可以忽略什么", prompt)
+
+    def test_prompt_requires_sources_inline_not_in_a_trailing_index(self) -> None:
+        """来源集中到末尾，读者就得在正文和索引之间来回跳。"""
+        prompt = email_summary_prompt_text()
+
         self.assertIn("必须把来源嵌在正文对应内容里", prompt)
         self.assertIn("[UID 1001](email://2026-07-05/1001)", prompt)
+        self.assertIn("不要把来源集中放到末尾", prompt)
         self.assertNotIn("## 来源索引", prompt)
+
+    def test_prompt_pins_the_brief_section_skeleton(self) -> None:
+        """review_checklist 按 `## 今天先看` 判 brief 是否成形，标题不能随手改。"""
+        prompt = email_summary_prompt_text()
+
         self.assertIn("# Morning Brief - {date}", prompt)
-        self.assertIn("## 今天先看", prompt)
-        self.assertIn("## 需要处理", prompt)
-        self.assertIn("## 情报线索", prompt)
-        self.assertIn("## 证据边界", prompt)
-        self.assertNotIn("对象: EmailIntelBrief", prompt)
-        self.assertNotIn("来源对象: EmailEvidencePack", prompt)
-        self.assertNotIn("处理方式: EmailTopicMap -> EmailEvidencePack -> EmailIntelBrief", prompt)
-        self.assertIn("合并重复、营销、低信号邮件", prompt)
-        self.assertIn("digest 类邮件例外", prompt)
-        self.assertIn("跟踪话题提示", prompt)
-        self.assertNotIn("EmailEvidencePack", prompt)
+        for heading in ("## 今天先看", "## 需要处理", "## 情报线索", "## 证据边界"):
+            with self.subTest(heading=heading):
+                self.assertIn(heading, prompt)
+
+    def test_prompt_states_how_evidence_may_be_used(self) -> None:
+        """邮件片段不是正文，扫描可能触达上限——这些边界必须写在 prompt 里。"""
+        prompt = email_summary_prompt_text()
+
         self.assertIn("邮件片段不是完整正文", prompt)
         self.assertIn("已抓取公开网页证据优先", prompt)
         self.assertIn("证据边界可以自然写成", prompt)
-        self.assertIn("不要把来源集中放到末尾", prompt)
         self.assertIn("触达上限，可能有遗漏", prompt)
+        self.assertIn("跟踪话题提示", prompt)
+        self.assertIn("合并重复、营销、低信号邮件", prompt)
+        self.assertIn("digest 类邮件例外", prompt)
 
     def test_email_summary_prompt_forbids_packing_items_onto_one_line(self) -> None:
         """真实运行里 LLM 把 19 条快讯写进了同一行：链接还能点，列表结构没了。
