@@ -127,6 +127,18 @@ The memory source defaults to:
 ~/.hermes/memories/MEMORY.md
 ```
 
+User interpretation rules default to:
+
+```text
+outputs/interpretation_rules.md
+```
+
+That file is injected into the `{rules}` placeholder of
+`hermes_interpretation_prompt.md`, after the built-in requirements, so its rules
+win on conflict. HTML comments are stripped and the rest is truncated at 4000
+characters. An empty or comment-only file leaves the prompt unchanged. Override
+the path with `--interpretation-rules <path>`.
+
 ## Cleanup Policy
 
 Cleanup runs after the daily Discord delivery job.

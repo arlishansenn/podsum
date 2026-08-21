@@ -24,6 +24,7 @@ DEFAULT_TRANSCRIPTS_ROOT = Path.home() / "Podcasts/AutoDownloads"
 DEFAULT_STATE_FILE = Path.home() / "Library/Application Support/Podsum/feishu_sent.json"
 DEFAULT_MEMORY_FILE = Path.home() / ".hermes/memories/MEMORY.md"
 DEFAULT_INTERPRETATION_PROMPT = Path(__file__).with_name("hermes_interpretation_prompt.md")
+DEFAULT_INTERPRETATION_RULES = Path(__file__).with_name("interpretation_rules.md")
 DEFAULT_TARGET = "discord:1518857496788467832"
 DEFAULT_HERMES = Path.home() / ".local/bin/hermes"
 DEFAULT_AUDIO_RETENTION_DAYS = 14
@@ -33,6 +34,19 @@ DEFAULT_BUNDLE_RETENTION_DAYS = 90
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".opus", ".aac", ".mp4", ".m4v"}
 TRANSCRIPT_EXCERPT_CHARS = 50000
 MEMORY_EXCERPT_CHARS = 12000
+INTERPRETATION_RULES_EXCERPT_CHARS = 4000
+INTERPRETATION_RULES_HEADER = "用户附加规则（与上面要求冲突时，以这里为准）:"
+
+# 本模块直接运行时需要展开 `~` 的路径参数。全部为必选，永不为 None。
+PATH_ARGS = (
+    "transcripts_root",
+    "state",
+    "memory_file",
+    "interpretation_prompt",
+    "interpretation_rules",
+    "project_dir",
+    "hermes",
+)
 
 
 def log(message: str) -> None:
@@ -219,6 +233,20 @@ def write_epub(markdown_path: Path, title: str) -> Path:
     return epub_path
 
 
+def interpretation_rules_block(path: Path) -> str:
+    """用户手写的解读规则渲染成 prompt 片段。
+
+    文件缺失、为空或只剩注释时返回空串，表头随规则一起消失，
+    prompt 内容与没有这个功能时一致。
+    """
+    if not path.exists():
+        return ""
+    rules = re.sub(r"<!--.*?-->", "", read_text(path), flags=re.DOTALL).strip()
+    if not rules:
+        return ""
+    return f"{INTERPRETATION_RULES_HEADER}\n{rules[:INTERPRETATION_RULES_EXCERPT_CHARS]}"
+
+
 def hermes_interpretation(args: argparse.Namespace, info: dict[str, Any]) -> str:
     memory = ""
     if args.memory_file.exists():
@@ -234,6 +262,7 @@ def hermes_interpretation(args: argparse.Namespace, info: dict[str, Any]) -> str
         podcast=info["podcast"],
         episode=info["episode"],
         transcript=transcript,
+        rules=interpretation_rules_block(args.interpretation_rules),
     )
     ok, value = run_hermes_prompt(
         str(args.hermes),
@@ -435,6 +464,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE_FILE)
     parser.add_argument("--memory-file", type=Path, default=DEFAULT_MEMORY_FILE)
     parser.add_argument("--interpretation-prompt", type=Path, default=DEFAULT_INTERPRETATION_PROMPT)
+    parser.add_argument("--interpretation-rules", type=Path, default=DEFAULT_INTERPRETATION_RULES, help="用户手写的自然语言解读规则文件，注入 prompt 的 {rules} 占位符。")
     parser.add_argument("--project-dir", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--target", default=DEFAULT_TARGET)
     parser.add_argument("--hermes", type=Path, default=DEFAULT_HERMES)
@@ -453,12 +483,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    args.transcripts_root = args.transcripts_root.expanduser()
-    args.state = args.state.expanduser()
-    args.memory_file = args.memory_file.expanduser()
-    args.interpretation_prompt = args.interpretation_prompt.expanduser()
-    args.project_dir = args.project_dir.expanduser()
-    args.hermes = args.hermes.expanduser()
+    for name in PATH_ARGS:
+        setattr(args, name, getattr(args, name).expanduser())
     if args.audio_retention_days < -1:
         parser.error("--audio-retention-days must be >= -1")
     if args.transcript_retention_days < -1:
