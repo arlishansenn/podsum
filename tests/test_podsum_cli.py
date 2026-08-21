@@ -33,6 +33,10 @@ def run_podsum(
     cwd: Optional[Path] = None,
     env: Optional[dict[str, str]] = None,
 ) -> subprocess.CompletedProcess[str]:
+    # 把部署根指向一次性目录：否则子进程会读到这台机器上真实的 .env，
+    # 那里的开关（PODSUM_EMAIL_SUMMARY 之类）会改变被测行为。
+    if env is None:
+        env = dict(os.environ, PODSUM_HOME=tempfile.mkdtemp(prefix="podsum-test-home-"))
     return subprocess.run(
         [sys.executable, str(PODSUM), *args],
         cwd=str(cwd or ROOT),
