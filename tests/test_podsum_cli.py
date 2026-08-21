@@ -12,7 +12,7 @@ import urllib.request
 import unittest
 from email.message import EmailMessage
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -2255,6 +2255,8 @@ class PodsumCliTest(unittest.TestCase):
 
             result = run_podsum(
                 "send",
+                "--target",
+                "discord:test-target",
                 "--state",
                 str(state),
                 "--output",
@@ -2274,7 +2276,7 @@ class PodsumCliTest(unittest.TestCase):
             self.assertTrue(Path(episode["bundle_path"]).exists())
             self.assertTrue(Path(episode["epub_path"]).exists())
             send_args = hermes_args.read_text(encoding="utf-8").splitlines()
-            self.assertEqual(send_args[send_args.index("--to") + 1], "discord:1518857496788467832")
+            self.assertEqual(send_args[send_args.index("--to") + 1], "discord:test-target")
 
     def test_failed_send_is_retried_from_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2317,6 +2319,8 @@ class PodsumCliTest(unittest.TestCase):
             hermes.chmod(0o755)
             common_args = [
                 "send",
+                "--target",
+                "discord:test-target",
                 "--state",
                 str(state),
                 "--output",
@@ -3180,6 +3184,8 @@ class PodsumCliTest(unittest.TestCase):
 
             result = run_podsum(
                 "email-summary",
+                "--target",
+                "discord:test-target",
                 "--scan-file",
                 str(scan_file),
                 "--output",
@@ -3794,6 +3800,66 @@ class PodsumCliTest(unittest.TestCase):
 
             self.assertEqual(calls, ["cleanup"])
             self.assertNotEqual(result, 0)
+
+    def test_resolve_target_prefers_cli_then_env_then_env_file(self) -> None:
+        """投递目标的优先级链：CLI > 进程环境变量 > .env 文件。"""
+        env_file = {"PODSUM_TARGET": "discord:from-file"}
+        env_path = Path("/nowhere/.env")
+
+        self.assertEqual(
+            podsum_runtime.resolve_target("discord:from-cli", env_file, env_path),
+            "discord:from-cli",
+        )
+
+        real = os.environ.get("PODSUM_TARGET")
+        os.environ["PODSUM_TARGET"] = "discord:from-env"
+        try:
+            self.assertEqual(
+                podsum_runtime.resolve_target("", env_file, env_path),
+                "discord:from-env",
+            )
+            self.assertEqual(
+                podsum_runtime.resolve_target("discord:from-cli", env_file, env_path),
+                "discord:from-cli",
+            )
+        finally:
+            if real is None:
+                del os.environ["PODSUM_TARGET"]
+            else:
+                os.environ["PODSUM_TARGET"] = real
+
+        self.assertEqual(
+            podsum_runtime.resolve_target("", env_file, env_path),
+            "discord:from-file",
+        )
+
+    def test_resolve_target_fails_loudly_when_unconfigured(self) -> None:
+        """未配置投递目标必须报错，而不是回落到某个写死的默认频道。"""
+        real = os.environ.pop("PODSUM_TARGET", None)
+        try:
+            with self.assertRaises(RuntimeError) as caught:
+                podsum_runtime.resolve_target("", {}, Path("/nowhere/.env"))
+        finally:
+            if real is not None:
+                os.environ["PODSUM_TARGET"] = real
+        message = str(caught.exception)
+        self.assertIn("PODSUM_TARGET", message)
+        self.assertIn("/nowhere/.env", message)
+
+    def test_target_cli_defaults_are_empty_on_every_entrypoint(self) -> None:
+        """三个 entrypoint 的 --target 默认值都必须为空，否则 config 那一档永远读不到。"""
+        def target_defaults(parser: argparse.ArgumentParser) -> list[Any]:
+            found = [a.default for a in parser._actions if "--target" in a.option_strings]
+            for action in parser._actions:
+                for sub in getattr(action, "choices", {}).values() if isinstance(getattr(action, "choices", None), dict) else []:
+                    found.extend(target_defaults(sub))
+            return found
+
+        for parser in (podsum.build_parser(), sender.build_parser(), email_summary.build_parser()):
+            defaults = target_defaults(parser)
+            self.assertTrue(defaults, "entrypoint is missing --target")
+            for default in defaults:
+                self.assertEqual(default, "")
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import podsum_runtime
 from podsum_core.delivery import run_hermes_prompt, send_hermes_file
 from podsum_core.epub_converter import create_epub_from_markdown
 
@@ -25,7 +26,7 @@ DEFAULT_STATE_FILE = Path.home() / "Library/Application Support/Podsum/feishu_se
 DEFAULT_MEMORY_FILE = Path.home() / ".hermes/memories/MEMORY.md"
 DEFAULT_INTERPRETATION_PROMPT = Path(__file__).with_name("hermes_interpretation_prompt.md")
 DEFAULT_INTERPRETATION_RULES = Path(__file__).with_name("interpretation_rules.md")
-DEFAULT_TARGET = "discord:1518857496788467832"
+DEFAULT_TARGET = ""
 DEFAULT_HERMES = Path.home() / ".local/bin/hermes"
 DEFAULT_AUDIO_RETENTION_DAYS = 14
 DEFAULT_TRANSCRIPT_RETENTION_DAYS = 90
@@ -422,7 +423,10 @@ def send_file(args: argparse.Namespace, path: Path, count: int, source_md: Path 
         log(f"would send: {path}")
         return
 
-    output = send_hermes_file(str(args.hermes), args.target, subject, message)
+    target = podsum_runtime.resolve_target(
+        args.target, podsum_runtime.load_env_file(podsum_runtime.default_env_file()), podsum_runtime.default_env_file()
+    )
+    output = send_hermes_file(str(args.hermes), target, subject, message)
     log(output)
 
 

@@ -26,6 +26,7 @@ from email.message import Message
 from pathlib import Path
 from typing import Any
 
+import podsum_runtime
 import podsum_send_to_feishu as sender
 
 _email_package_dir = str(Path(__file__).with_name("email"))
@@ -47,6 +48,9 @@ DEFAULT_TOPIC_FILE = Path(__file__).with_name("topic.md")
 DEFAULT_STATE_FILE = Path.home() / "Library/Application Support/Podsum/state.json"
 DEFAULT_HERMES = sender.DEFAULT_HERMES
 DEFAULT_TARGET = sender.DEFAULT_TARGET
+load_env_file = podsum_runtime.load_env_file
+config_value = podsum_runtime.config_value
+parse_bool = podsum_runtime.parse_bool
 DEFAULT_SUMMARY_ENGINE = "podsum"
 DEFAULT_IMAP_HOST = "imap.gmail.com"
 DEFAULT_IMAP_PORT = 993
@@ -189,37 +193,6 @@ def now_stamp() -> str:
 
 def today_string() -> str:
     return dt.datetime.now().strftime("%Y-%m-%d")
-
-
-def load_env_file(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    if not path.exists():
-        return values
-    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        value = value.strip().strip("'").strip('"')
-        values[key.strip()] = value
-    return values
-
-
-def config_value(env_file: dict[str, str], file_name: str, *env_names: str, default: str = "") -> str:
-    for name in (file_name, *env_names):
-        value = os.environ.get(name)
-        if value:
-            return value
-    value = env_file.get(file_name)
-    if value:
-        return value
-    return default
-
-
-def parse_bool(value: str, default: bool) -> bool:
-    if not value:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def clean_text(value: str, limit: int = SNIPPET_CHARS) -> str:
@@ -2514,7 +2487,10 @@ def send_report(args: argparse.Namespace, report_path: Path, scan: dict[str, Any
     if args.dry_run:
         log(f"would send email summary: {epub_path}")
     else:
-        log(send_hermes_file(str(args.hermes), args.target, subject, message))
+        target = podsum_runtime.resolve_target(
+            args.target, podsum_runtime.load_env_file(args.env_file), args.env_file
+        )
+        log(send_hermes_file(str(args.hermes), target, subject, message))
     return epub_path
 
 
