@@ -29,13 +29,14 @@ def compose_with_need_store(
     path: str,
     review: dict[str, Any],
     reason: str,
+    writer: Any = None,
 ) -> BriefComposition:
     created_at = _now_stamp()
     scan = _scan_with_topic_map(pack, topic_map)
     reconciled_store = reconcile_need_store(pack, needs, created_at, DEFAULT_RECONCILE_MAX_CHECKS)
     emitted_needs = snippet_only_needs(pack, f"brief-{pack.date}", created_at)
     next_store = merge_need_store(reconciled_store, emitted_needs)
-    markdown = _build_markdown(scan, reason, emitted_needs)
+    markdown = _build_markdown(scan, reason, emitted_needs, writer)
     brief = _brief_from_markdown(pack, path, markdown, review, emitted_needs)
     return BriefComposition(email_intel_brief=brief, need_store=next_store)
 
@@ -47,9 +48,10 @@ def compose_and_persist(
     path: str,
     review: dict[str, Any],
     reason: str,
+    writer: Any = None,
 ) -> BriefComposition:
     existing_store = need_store.load_need_store(artifact_dir)
-    composition = compose_with_need_store(pack, topic_map, existing_store, path, review, reason)
+    composition = compose_with_need_store(pack, topic_map, existing_store, path, review, reason, writer)
     need_store.save_need_store(artifact_dir, composition.need_store)
     return composition
 
@@ -190,10 +192,18 @@ def _scan_with_topic_map(pack: EmailEvidencePack, topic_map: dict[str, Any]) -> 
     return scan
 
 
-def _build_markdown(scan: dict[str, Any], reason: str, emitted_needs: list[EvidenceNeed]) -> str:
+def _build_markdown(
+    scan: dict[str, Any],
+    reason: str,
+    emitted_needs: list[EvidenceNeed],
+    writer: Any = None,
+) -> str:
     import podsum_email_summary as email_summary
 
-    return email_summary.build_intel_brief_draft(scan, reason)
+    # writer 为空表示不调 LLM（dry-run，或调用方没配）。模板是兜底，不是常态。
+    if writer is None:
+        return email_summary.build_intel_brief_draft(scan, reason)
+    return writer(scan, reason)
 
 
 def _brief_from_markdown(

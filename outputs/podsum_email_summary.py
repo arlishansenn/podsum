@@ -2394,7 +2394,7 @@ def digest_section_lines(scan: dict[str, Any], items: list[dict[str, Any]]) -> l
     return lines
 
 
-def build_intel_brief_draft(scan: dict[str, Any], reason: str = "") -> str:
+def build_intel_brief_draft(scan: dict[str, Any], reason: str = "", *, notice: str = "") -> str:
     all_items = unique_delivery_items([item for item in scan.get("items", []) if isinstance(item, dict)])
     # digest 有自己的展示区：它的价值是整张链接列表，挤进 top5 只会被截断成一行。
     digest_items = [item for item in all_items if is_digest_item(item)]
@@ -2463,6 +2463,8 @@ def build_intel_brief_draft(scan: dict[str, Any], reason: str = "") -> str:
         displayed.extend(digest_items)
 
     boundaries = delivery_evidence_boundary(scan, displayed)
+    if notice:
+        boundaries = [notice, *boundaries]
     if boundaries:
         lines.extend(["", "## 证据边界", ""])
         lines.extend(f"- {line}" for line in boundaries)
@@ -2585,6 +2587,37 @@ def prune_empty_signal_sections(markdown: str) -> str:
     return "\n\n".join(pruned).rstrip() + "\n"
 
 
+def llm_brief_markdown(
+    scan: dict[str, Any],
+    *,
+    hermes: str,
+    prompt_path: Path,
+    project_dir: Path,
+    timeout: int,
+    reason: str = "",
+) -> str:
+    """LLM 写 brief，失败或空输出回落到确定性模板。
+
+    模板是兜底不是常态：不调 LLM 的 brief 只能一行一封邮件地罗列，没有判断。
+    降级必须写进正文，否则没人知道今天这份是模板产出的。
+    """
+    prompt = prompt_path.read_text(encoding="utf-8").format(
+        date=scan["date"],
+        generated_at=now_stamp(),
+        account=scan.get("account", ""),
+        window=scan.get("window", ""),
+        raw_count=scan.get("raw_count", 0),
+        scan_date=scan["date"],
+        scan_json=json.dumps(scan, ensure_ascii=False, indent=2),
+    )
+    ok, value = run_hermes_prompt(str(hermes), prompt, cwd=str(project_dir), timeout=timeout)
+    if not ok:
+        return build_intel_brief_draft(scan, reason, notice=f"降级：LLM 调用失败（{value}），本篇由确定性模板产出。")
+    if not str(value or "").strip():
+        return build_intel_brief_draft(scan, reason, notice="降级：LLM 返回空输出，本篇由确定性模板产出。")
+    return ensure_intel_brief_traceability(prune_empty_signal_sections(value), scan)
+
+
 def render_report(args: argparse.Namespace, scan: dict[str, Any]) -> str:
     summary_engine = getattr(args, "summary_engine", DEFAULT_SUMMARY_ENGINE)
     if summary_engine == "podsum":
@@ -2636,6 +2669,19 @@ def run_podsum_email_graph(
     artifact_dir = email_reports_dir(args.output)
     source_scan = scan or _read_scan_file(scan_path)
     run_id = f"email-summary-{source_scan.get('date', now_stamp())}-{int(time.time())}"
+    # dry-run 不调 LLM，保持确定性输出；其余情况 brief 由 LLM 写，模板只做兜底。
+    brief_writer = None
+    if not args.dry_run:
+        def brief_writer(scan_dict: dict[str, Any], writer_reason: str) -> str:
+            return llm_brief_markdown(
+                scan_dict,
+                hermes=str(args.hermes),
+                prompt_path=args.email_summary_prompt,
+                project_dir=args.project_dir,
+                timeout=args.hermes_timeout,
+                reason=writer_reason,
+            )
+
     context = email_graph.build_email_run_context(
         policy,
         topic_map,
@@ -2644,6 +2690,7 @@ def run_podsum_email_graph(
         fetch_link_context,
         reason,
         {},
+        brief_writer,
     )
     initial_state = email_graph.initial_email_run_state(
         run_id,
