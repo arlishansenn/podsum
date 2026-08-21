@@ -68,6 +68,34 @@ profile：
 
 安装脚本保留原有的 Hermes category 路径，所以 skill 内部的引用依然有效。
 
+## 安装位置
+
+开发副本和生产副本是两份独立的目录，之间没有任何自动同步。
+
+```text
+~/project/podsum                          # git clone，开发在这里
+~/Library/Application Support/Podsum/     # 物化的生产副本，launchd 跑的是这份
+```
+
+生产副本里的关键路径（注意路径含空格，引用时要加引号）：
+
+```text
+~/Library/Application Support/Podsum/outputs      # 生产代码
+~/Library/Application Support/Podsum/.venv        # 运行时 interpreter
+~/Library/Application Support/Podsum/state.json   # 断点续跑状态
+~/Library/Logs/podsum.log, podsum.err.log         # 运行日志
+```
+
+LaunchAgent `com.local.podsum` 直接指向生产副本，不经过 clone：
+
+```text
+/Users/admin/Library/Application Support/Podsum/.venv/bin/python \
+  "/Users/admin/Library/Application Support/Podsum/outputs/podsum.py" run-once --cleanup
+```
+
+生产副本没有 `.git`。在 clone 里改完代码要手动同步过去才会生效。部署副本的运维细节
+见 [`outputs/README.md`](outputs/README.md)。
+
 ## Python Runtime
 
 Podsum 应当跑在它自己的 application virtual environment 里，而不是系统 Python。手
