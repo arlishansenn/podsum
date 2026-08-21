@@ -3623,15 +3623,33 @@ class PodsumCliTest(unittest.TestCase):
             self.assertIn("Podcast: Fixture Show", prompt)
             self.assertIn("Transcript body.", prompt)
 
-    def test_comment_only_interpretation_rules_file_renders_prompt_without_rules_section(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            prompt = self.capture_interpretation_prompt(
-                Path(tmp),
-                rules_text="<!--\n在下面写你的解读规则，一行一条。\n-->\n\n",
-            )
+    def write_rules(self, tmp: str, text: str) -> Path:
+        path = Path(tmp) / "interpretation_rules.md"
+        path.write_text(text, encoding="utf-8")
+        return path
 
-            self.assertNotIn(sender.INTERPRETATION_RULES_HEADER, prompt)
-            self.assertNotIn("在下面写你的解读规则", prompt)
+    def test_comment_only_interpretation_rules_file_yields_no_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.write_rules(tmp, "<!--\n在下面写你的解读规则，一行一条。\n-->\n\n")
+
+            self.assertEqual(sender.interpretation_rules_block(path), "")
+
+    def test_interpretation_rules_block_strips_every_comment_and_keeps_rules_between_them(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.write_rules(tmp, "<!-- 说明头 -->\n- 保留这一条。\n<!-- 说明尾 -->\n")
+
+            block = sender.interpretation_rules_block(path)
+
+            self.assertEqual(block, f"{sender.INTERPRETATION_RULES_HEADER}\n- 保留这一条。")
+
+    def test_overlong_interpretation_rules_are_capped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.write_rules(tmp, "规则" * sender.INTERPRETATION_RULES_EXCERPT_CHARS)
+
+            block = sender.interpretation_rules_block(path)
+            rules = block[len(sender.INTERPRETATION_RULES_HEADER) + 1 :]
+
+            self.assertEqual(len(rules), sender.INTERPRETATION_RULES_EXCERPT_CHARS)
 
     def test_legacy_prompt_without_rules_placeholder_still_renders(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3647,7 +3665,7 @@ class PodsumCliTest(unittest.TestCase):
     def test_shipped_interpretation_rules_file_is_empty_so_default_output_is_unchanged(self) -> None:
         self.assertIn("{rules}", sender.DEFAULT_INTERPRETATION_PROMPT.read_text(encoding="utf-8"))
         self.assertTrue(sender.DEFAULT_INTERPRETATION_RULES.exists())
-        self.assertEqual(sender.read_interpretation_rules(sender.DEFAULT_INTERPRETATION_RULES), "")
+        self.assertEqual(sender.interpretation_rules_block(sender.DEFAULT_INTERPRETATION_RULES), "")
 
 
 if __name__ == "__main__":

@@ -222,12 +222,18 @@ def write_epub(markdown_path: Path, title: str) -> Path:
     return epub_path
 
 
-def read_interpretation_rules(path: Path) -> str:
-    """用户手写的自然语言解读规则；文件缺失、为空或只有注释时返回空串。"""
+def interpretation_rules_block(path: Path) -> str:
+    """用户手写的解读规则渲染成 prompt 片段。
+
+    文件缺失、为空或只剩注释时返回空串，表头随规则一起消失，
+    prompt 内容与没有这个功能时一致。
+    """
     if not path.exists():
         return ""
-    text = re.sub(r"<!--.*?-->", "", path.read_text(encoding="utf-8", errors="replace"), flags=re.DOTALL)
-    return text.strip()[:INTERPRETATION_RULES_EXCERPT_CHARS]
+    rules = re.sub(r"<!--.*?-->", "", read_text(path), flags=re.DOTALL).strip()
+    if not rules:
+        return ""
+    return f"{INTERPRETATION_RULES_HEADER}\n{rules[:INTERPRETATION_RULES_EXCERPT_CHARS]}"
 
 
 def hermes_interpretation(args: argparse.Namespace, info: dict[str, Any]) -> str:
@@ -239,17 +245,13 @@ def hermes_interpretation(args: argparse.Namespace, info: dict[str, Any]) -> str
     if len(transcript) > TRANSCRIPT_EXCERPT_CHARS:
         transcript = transcript[:TRANSCRIPT_EXCERPT_CHARS] + "\n\n[文字稿已截断，仅用于生成顶部解读]"
 
-    rules = read_interpretation_rules(args.interpretation_rules)
-    # 表头随规则一起出现，规则为空时整段消失，prompt 与加这个功能之前等价。
-    rules_block = f"{INTERPRETATION_RULES_HEADER}\n{rules}" if rules else ""
-
     template = read_text(args.interpretation_prompt)
     prompt = template.format(
         memory=memory,
         podcast=info["podcast"],
         episode=info["episode"],
         transcript=transcript,
-        rules=rules_block,
+        rules=interpretation_rules_block(args.interpretation_rules),
     )
     ok, value = run_hermes_prompt(
         str(args.hermes),
