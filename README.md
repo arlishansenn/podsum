@@ -19,6 +19,28 @@ IMAP/Gmail 邮件，生成结构化的 scan JSON 文件，用 Hermes 生成摘�
 独立的转写稿清洗项目在
 [`outputs/transcript_cleaner/`](outputs/transcript_cleaner/README.md)。
 
+## 安装
+
+```bash
+scripts/install.sh
+```
+
+把仓库同步到部署目录，建立 venv 与 Node 依赖，装好并加载定时任务。部署位置由
+`PODSUM_HOME` 决定，默认 `~/Library/Application Support/Podsum`。
+
+脚本只负责自己装上去的东西：
+
+- 同步内容是**版本库中 `outputs/` 下被追踪的文件**，不维护手工排除列表。
+- 用户内容（`feeds.json`、`topic.md`、`email_link_policy.md`、`interpretation_rules.md`）**存在即跳过**，缺席时从同名 `.example` 生成。
+- 只删除自己装过、且已从追踪集消失的文件；认不出来的一律列出而不删。
+- 状态文件与 `.env` 永不触碰。
+- 定时任务正在执行时**拒绝重载**，不打断跑到一半的转写。
+
+`ffmpeg`、`node`、`hermes` 等外部依赖**只检测不代装**，缺失时打印可直接复制的命令。
+理由见 [`docs/adr/0001-install-failure-radius.md`](docs/adr/0001-install-failure-radius.md)。
+
+跳过某一步：`--skip-venv`、`--skip-node`、`--skip-launchd`。
+
 ## 解读规则
 
 `outputs/interpretation_rules.md` 的内容注入

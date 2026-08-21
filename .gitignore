@@ -47,3 +47,9 @@ credentials.json
 # Local notes / research scratch
 context.md
 research.md
+
+# 用户内容：真实文件由 install.sh 从同名 .example 生成，缺席时代码有兜底。
+# 其中两个是 workbench 在运行时写的，入库会让仓库模板覆盖界面上的编辑。
+outputs/topic.md
+outputs/email_link_policy.md
+outputs/interpretation_rules.md

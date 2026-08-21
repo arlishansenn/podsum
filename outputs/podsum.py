@@ -268,7 +268,7 @@ def run_once(args: argparse.Namespace) -> int:
     # cleanup 是本次运行已完成工作的收尾，不能被下游可选步骤的失败挡住：
     # 邮件摘要一失败就提前返回，会让当天所有 retention 策略静默停摆。
     email_result = 0
-    if getattr(args, "email_summary", False):
+    if email_summary_requested(args):
         email_result = run_email_summary(email_summary_args_from_podsum(args))
     else:
         log("Email summary skipped.")
@@ -486,6 +486,20 @@ def send(args: argparse.Namespace) -> int:
     return 0
 
 
+def email_summary_requested(args: argparse.Namespace) -> bool:
+    """邮件摘要开关：CLI 给了就无条件生效，否则看 .env / 环境变量。
+
+    开关移出 launchd 配置，改投递方式或开关邮件摘要不必再动定时任务。
+    读取真实邮箱的确认开关刻意没有一起移出——它的价值就在于每次都要显式写一遍。
+    """
+    if getattr(args, "email_summary", False):
+        return True
+    env_file = podsum_runtime.load_env_file(args.email_env_file)
+    return podsum_runtime.parse_bool(
+        podsum_runtime.config_value(env_file, podsum_runtime.PODSUM_EMAIL_SUMMARY_ENV), False
+    )
+
+
 def email_summary_args_from_podsum(args: argparse.Namespace) -> argparse.Namespace:
     return argparse.Namespace(
         output=args.output,
@@ -675,7 +689,7 @@ def add_run_email_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Explicitly allow the email summary step to read the configured Gmail/IMAP mailbox.",
     )
-    parser.add_argument("--email-delivery", choices=("hermes", "email"), default=email_summary.DEFAULT_DELIVERY)
+    parser.add_argument("--email-delivery", choices=("hermes", "email"), default="")
     parser.add_argument("--email-smtp-host", default="")
     parser.add_argument("--email-smtp-port", type=int, default=0)
     parser.add_argument("--email-smtp-user", default="")

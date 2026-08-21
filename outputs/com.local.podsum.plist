@@ -8,8 +8,8 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/admin/Library/Application Support/Podsum/.venv/bin/python</string>
-    <string>/Users/admin/Library/Application Support/Podsum/outputs/podsum.py</string>
+    <string>__PODSUM_HOME__/.venv/bin/python</string>
+    <string>__PODSUM_HOME__/outputs/podsum.py</string>
     <string>run-once</string>
     <string>--cleanup</string>
     <string>--audio-retention-days</string>
@@ -34,9 +34,9 @@
   <false/>
 
   <key>StandardOutPath</key>
-  <string>/Users/admin/Library/Logs/podsum.log</string>
+  <string>__HOME__/Library/Logs/podsum.log</string>
 
   <key>StandardErrorPath</key>
-  <string>/Users/admin/Library/Logs/podsum.err.log</string>
+  <string>__HOME__/Library/Logs/podsum.err.log</string>
 </dict>
 </plist>
