@@ -111,6 +111,14 @@ class InstallTest(unittest.TestCase):
         after = sorted((p.relative_to(self.home), p.stat().st_mtime_ns) for p in self.home.rglob("*") if p.is_file())
         self.assertEqual([n for n, _ in before], [n for n, _ in after])
 
+    def test_shipped_plist_carries_the_imap_confirmation_flag(self) -> None:
+        """确认开关刻意不移进 .env，那它就必须由 plist 携带，否则定时任务永远读不了邮箱。"""
+        plist = (ROOT / "outputs" / "com.local.podsum.plist").read_text(encoding="utf-8")
+        self.assertIn("<string>--email-allow-imap-read</string>", plist)
+        # 反过来：会变成「一次设置永久生效」的开关不该写死在 plist 里
+        for externalized in ("--target", "--email-summary</string>", "--email-delivery"):
+            self.assertNotIn(externalized, plist, f"{externalized} 应当由 .env 提供")
+
 
 if __name__ == "__main__":
     unittest.main()

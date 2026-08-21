@@ -20,6 +20,9 @@
     <string>30</string>
     <string>--bundle-retention-days</string>
     <string>90</string>
+    <!-- 读取真实邮箱的确认刻意留在这里，不移进 .env：它的价值就是每个调用点
+         都得显式写一遍，进了配置文件就变成一次设置、永久生效。 -->
+    <string>--email-allow-imap-read</string>
   </array>
 
   <key>StartCalendarInterval</key>

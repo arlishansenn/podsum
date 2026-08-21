@@ -127,8 +127,17 @@ report_strangers() {
     esac
     grep -qxF "$rel" "$installed" && continue
     is_user_file "$rel" && continue
-    echo "unknown (left alone): $rel"
-  done < <(find "$PODSUM_HOME/outputs" -type f)
+    printf '%s\n' "$rel"
+    # 按目录折叠：一个实验目录里几十个文件会把要紧的信息挤出屏幕，
+    # 而人读不到的输出等于没有输出。
+  done < <(find "$PODSUM_HOME/outputs" -type f) | awk -F/ '
+      { dir = ""; for (i = 1; i < NF; i++) dir = dir $i "/"; count[dir]++; sample[dir] = $0 }
+      END {
+        for (dir in count) {
+          if (count[dir] > 1) printf "unknown (left alone): %s (%d 个文件)\n", dir, count[dir]
+          else printf "unknown (left alone): %s\n", sample[dir]
+        }
+      }' | sort
 }
 
 ensure_env_file() {
@@ -154,9 +163,9 @@ ensure_env_file() {
 install_venv() {
   local venv="$PODSUM_HOME/.venv"
   [ -d "$venv" ] || python3 -m venv "$venv"
-  "$venv/bin/pip" install --quiet --group "$PROJECT_ROOT/pyproject.toml:runtime"
+  "$venv/bin/pip" install --quiet --disable-pip-version-check --group "$PROJECT_ROOT/pyproject.toml:runtime"
   if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
-    "$venv/bin/pip" install --quiet --group "$PROJECT_ROOT/pyproject.toml:transcribe"
+    "$venv/bin/pip" install --quiet --disable-pip-version-check --group "$PROJECT_ROOT/pyproject.toml:transcribe"
   fi
   echo "venv ready: $venv"
 }
