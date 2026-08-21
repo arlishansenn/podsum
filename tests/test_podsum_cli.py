@@ -4096,6 +4096,39 @@ class PodsumCliTest(unittest.TestCase):
                 )
             )
 
+    def test_scan_payload_drops_podsum_own_mail(self) -> None:
+        """投递目标和扫描邮箱是同一个地址时，brief 会把自己读回来，逐日放大。"""
+        items = [
+            {"uid": "1", "from": "hdhopenclaw@17ms.com", "subject": "SMTP Connection Test"},
+            {"uid": "2", "from": "Podsum <hdhopenclaw@17ms.com>", "subject": "[Podsum] 2026-08-21 Email Brief"},
+            {"uid": "3", "from": "relay@example.com", "subject": "[Podsum] 2026-07-05 Email Brief"},
+            {"uid": "4", "from": "The Rundown AI <news@daily.therundown.ai>", "subject": "Slack turns coding into a group project"},
+        ]
+        payload = email_summary.scan_payload("hdhopenclaw@17ms.com", 1, 20, len(items), list(items))
+
+        self.assertEqual([item["uid"] for item in payload["items"]], ["4"])
+        self.assertEqual(payload["raw_count"], 4, "raw_count 是扫到的原始数量，不该被过滤改写")
+        self.assertEqual(payload["dropped_self_count"], 3)
+
+    def test_scan_payload_keeps_external_mail_from_a_lookalike_address(self) -> None:
+        """只按域名或前缀猜会误伤：地址不同、主题不带前缀的外部邮件必须留下。"""
+        items = [
+            {"uid": "1", "from": "notifications@17ms.com", "subject": "月度账单"},
+            {"uid": "2", "from": "hdhopenclaw@17ms.com.evil.test", "subject": "你好"},
+        ]
+        payload = email_summary.scan_payload("hdhopenclaw@17ms.com", 1, 20, len(items), list(items))
+        self.assertEqual([item["uid"] for item in payload["items"]], ["1", "2"])
+        self.assertEqual(payload["dropped_self_count"], 0)
+
+    def test_scan_payload_without_account_drops_nothing_by_address(self) -> None:
+        """离线 fixture 扫描没有真实账号，只能靠主题前缀，不能把所有邮件都当成自己的。"""
+        items = [
+            {"uid": "1", "from": "someone@example.com", "subject": "普通邮件"},
+            {"uid": "2", "from": "someone@example.com", "subject": "[Podsum] 2026-07-05 Email Brief"},
+        ]
+        payload = email_summary.scan_payload("", 1, 20, len(items), list(items))
+        self.assertEqual([item["uid"] for item in payload["items"]], ["1"])
+
 
 if __name__ == "__main__":
     unittest.main()
