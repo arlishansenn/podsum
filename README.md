@@ -21,6 +21,27 @@ documentation are in [`outputs/`](outputs/README.md).
 The independent transcript cleaning project is in
 [`outputs/transcript_cleaner/`](outputs/transcript_cleaner/README.md).
 
+## Interpretation Rules
+
+Write your own interpretation preferences in
+[`outputs/interpretation_rules.md`](outputs/interpretation_rules.md), one rule
+per line in plain natural language:
+
+```text
+- 这一集偏技术，多留代码细节和具体数字。
+- 长度压到 600 字以内。
+- 嘉宾的个人经历部分可以略过。
+```
+
+The file content is injected into the `{rules}` placeholder of
+`outputs/hermes_interpretation_prompt.md`, after the built-in requirements, so
+your rules win when they conflict with a built-in one. HTML comments are
+stripped, and the remaining text is truncated at 4000 characters.
+
+An empty file, or a file that holds only comments, gives exactly the same
+interpretation behaviour as before the file existed. Use a different rules file
+with `--interpretation-rules <path>`.
+
 ## Hermes Skills
 
 Podsum owns the project-specific copies of the Hermes skills used by the
