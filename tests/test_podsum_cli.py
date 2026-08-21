@@ -2082,8 +2082,11 @@ class PodsumCliTest(unittest.TestCase):
         self.assertIn("触达上限，可能有遗漏", markdown)
         self.assertIn("仅基于邮件摘要", markdown)
         self.assertIn("[UID personal-1](email://2026-07-05/personal-1)", markdown)
-        self.assertEqual([source["source_uid"] for source in sources], ["personal-1"])
+        # alert-1 是 google_alert：以前被整体排除、整封消失，现在进订阅摘要区并保留溯源。
+        self.assertEqual([source["source_uid"] for source in sources], ["personal-1", "alert-1"])
         self.assertEqual(sources[0]["subject"], "Fixture Follow-up")
+        self.assertIn("## 订阅摘要", markdown)
+        self.assertIn("](https://example.invalid/source)", markdown)
         self.assertTrue(checklist["ready_to_send"])
 
     def test_run_once_downloads_only_latest_episode_per_feed(self) -> None:
@@ -4190,6 +4193,94 @@ class PodsumCliTest(unittest.TestCase):
         ]
         payload = email_summary.scan_payload("", 1, 20, len(items), list(items))
         self.assertEqual([item["uid"] for item in payload["items"]], ["1"])
+
+class DigestRenderingTest(unittest.TestCase):
+    """digest 类邮件自己没有内容，内容就是那张链接列表。压成一行等于全部丢掉。"""
+
+    @staticmethod
+    def _alert(uid: str, date: str, links: list[tuple[str, str, str]]) -> dict[str, object]:
+        return {
+            "uid": uid,
+            "date": date,
+            "from": "Google Alerts <googlealerts-noreply@google.com>",
+            "subject": "Google快讯 - RWA",
+            "snippet": "RWA 相关的新报道",
+            "email_type": "google_alert",
+            "has_attachments": False,
+            "links": [
+                {
+                    "anchor_text": anchor_text,
+                    "context": context,
+                    "url": url,
+                    "normalized_url": url,
+                    "policy_decision": "pending",
+                }
+                for anchor_text, url, context in links
+            ],
+            "evidence": [],
+            "risks": [],
+            "flags": [],
+            "topics": [],
+        }
+
+    def _render(self) -> str:
+        shared = ("RWA 在 DeFi 活跃资金逼近 40 亿美元", "https://example.invalid/rwa-defi", "据 DefiLlama 数据，规模升至约 39.8 亿美元。")
+        scan = {
+            "date": "2026-08-21",
+            "account": "fixture@example.invalid",
+            "window": "2d",
+            "scan_limit": 20,
+            "raw_count": 2,
+            "possibly_truncated": False,
+            "items": [
+                self._alert("1329", "Wed, 19 Aug 2026 08:00:00 +0800", [
+                    shared,
+                    ("OneLife 链上全球购落地", "https://example.invalid/onelife", "RWA 从金融资产代币化迈向实体经济。"),
+                ]),
+                self._alert("1335", "Thu, 20 Aug 2026 08:00:00 +0800", [
+                    shared,
+                    ("X Layer 推 RWA 流动性激励", "https://example.invalid/xlayer", "总激励规模达 500 万美元。"),
+                ]),
+            ],
+        }
+        return email_summary.build_intel_brief_draft(scan)
+
+    def test_same_subject_digests_merge_into_one_deduped_list(self) -> None:
+        markdown = self._render()
+
+        # 三个唯一 URL 全在，共享的那个只出现一次——按 subject 判重会整封丢掉一整批条目
+        for url in ("https://example.invalid/rwa-defi", "https://example.invalid/onelife", "https://example.invalid/xlayer"):
+            with self.subTest(url=url):
+                self.assertEqual(markdown.count(f"]({url})"), 1, markdown)
+
+    def test_each_link_is_one_line_with_anchor_and_context(self) -> None:
+        markdown = self._render()
+
+        line = next((l for l in markdown.splitlines() if "https://example.invalid/xlayer" in l), "")
+        self.assertTrue(line.startswith("- "), markdown)
+        self.assertIn("[X Layer 推 RWA 流动性激励](https://example.invalid/xlayer)", line)
+        self.assertIn("总激励规模达 500 万美元", line)
+
+    def test_digest_gets_its_own_section_instead_of_competing_for_top_five(self) -> None:
+        markdown = self._render()
+
+        self.assertIn("Google快讯 - RWA", markdown)
+        top = markdown.split("## ")[1] if "## " in markdown else markdown
+        self.assertNotIn("example.invalid", top, "digest 链接不该挤进今天先看")
+
+    def test_merged_digest_keeps_every_contributing_email_traceable(self) -> None:
+        """合并去重之后仍要追得回是哪几封邮件带来的，否则 digest 区没有溯源。"""
+        markdown = self._render()
+
+        self.assertIn("[UID 1329](email://2026-08-21/1329)", markdown)
+        self.assertIn("[UID 1335](email://2026-08-21/1335)", markdown)
+
+    def test_pending_links_are_still_rendered_as_click_targets(self) -> None:
+        markdown = self._render()
+
+        # policy_decision 全是 pending：指向来源本身就是它的用途，不是未验证论断
+        self.assertIn("](https://example.invalid/rwa-defi)", markdown)
+
 
 
 if __name__ == "__main__":

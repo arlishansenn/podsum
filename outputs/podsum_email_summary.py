@@ -2335,8 +2335,52 @@ def unique_delivery_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return unique
 
 
+def is_digest_item(item: dict[str, Any]) -> bool:
+    return str(item.get("email_type") or "") in DIGEST_EMAIL_TYPES
+
+
+def merge_digest_groups(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """同主题的多封 digest 合成一张列表，按链接地址去重。
+
+    按邮件主题判重会整封丢弃：相邻两天的同名快讯里，只在其中一封出现的条目会
+    彻底消失。去重键必须是链接地址。
+    """
+    groups: dict[str, dict[str, Any]] = {}
+    seen: dict[str, set[str]] = {}
+    for item in sorted(items, key=lambda value: str(value.get("date") or "")):
+        subject = clean_text(str(item.get("subject") or ""), 90) or "订阅摘要"
+        group = groups.setdefault(subject, {"links": [], "items": []})
+        group["items"].append(item)
+        bucket = group["links"]
+        known = seen.setdefault(subject, set())
+        for link in item.get("links") or []:
+            if not isinstance(link, dict):
+                continue
+            url = str(link.get("normalized_url") or link.get("url") or "").strip()
+            if not url or url in known:
+                continue
+            known.add(url)
+            bucket.append(
+                {
+                    "url": url,
+                    "title": clean_text(str(link.get("anchor_text") or "").strip(), 90) or url,
+                    "context": clean_text(str(link.get("context") or "").strip(), 110),
+                }
+            )
+    return {subject: group for subject, group in groups.items() if group["links"]}
+
+
+def digest_link_line(link: dict[str, str]) -> str:
+    """一条链接一行：标题是点击目标，后面压一行摘要，只扫列表就能决定点不点开。"""
+    line = f"- [{link['title']}]({link['url']})"
+    return f"{line} — {link['context']}" if link["context"] else line
+
+
 def build_intel_brief_draft(scan: dict[str, Any], reason: str = "") -> str:
-    items = unique_delivery_items([item for item in scan.get("items", []) if isinstance(item, dict)])
+    all_items = unique_delivery_items([item for item in scan.get("items", []) if isinstance(item, dict)])
+    # digest 有自己的展示区：它的价值是整张链接列表，挤进 top5 只会被截断成一行。
+    digest_items = [item for item in all_items if is_digest_item(item)]
+    items = [item for item in all_items if not is_digest_item(item)]
     action_items = [item for item in items if action_reason(item)]
     intel_items = [item for item in items if not action_reason(item) and delivery_primary_topic(item)]
     low_priority_items = [
@@ -2345,7 +2389,6 @@ def build_intel_brief_draft(scan: dict[str, Any], reason: str = "") -> str:
         if item not in action_items
         and item not in intel_items
         and delivery_item_score(item) > 10
-        and str(item.get("email_type") or "") != "google_alert"
     ]
     ranked = sorted(action_items + intel_items + low_priority_items, key=lambda item: (-delivery_item_score(item), str(item.get("date") or "")))
     top_items = ranked[:5]
@@ -2395,6 +2438,20 @@ def build_intel_brief_draft(scan: dict[str, Any], reason: str = "") -> str:
         for item in remaining_low_priority[:3]:
             lines.append(delivery_item_line(scan, item, "可稍后看"))
             displayed.append(item)
+
+    digest_groups = merge_digest_groups(digest_items)
+    if digest_groups:
+        lines.extend(["", "## 订阅摘要", ""])
+        for subject, group in digest_groups.items():
+            # 合并去重之后仍要能追回是哪几封邮件带来的，否则 digest 区没有溯源。
+            sources = " ".join(source_markdown_link(scan, item) for item in group["items"])
+            lines.append(f"### {subject}")
+            lines.append(f"来源：{sources}")
+            lines.extend(digest_link_line(link) for link in group["links"])
+            lines.append("")
+        if lines[-1] == "":
+            lines.pop()
+        displayed.extend(digest_items)
 
     boundaries = delivery_evidence_boundary(scan, displayed)
     if boundaries:
