@@ -513,6 +513,17 @@ def email_summary_args_from_podsum(args: argparse.Namespace) -> argparse.Namespa
         dry_run=args.email_dry_run,
         no_send=args.email_no_send,
         allow_imap_read=args.email_allow_imap_read,
+        delivery=args.email_delivery,
+        smtp_host=args.email_smtp_host,
+        smtp_port=args.email_smtp_port,
+        smtp_user=args.email_smtp_user,
+        smtp_pass=args.email_smtp_pass,
+        smtp_from=args.email_smtp_from,
+        smtp_to=args.email_smtp_to,
+        smtp_starttls=args.email_smtp_starttls,
+        smtp_no_ssl=args.email_smtp_no_ssl,
+        smtp_no_tls_verify=args.email_smtp_no_tls_verify,
+        smtp_timeout=args.email_smtp_timeout,
     )
 
 
@@ -664,6 +675,17 @@ def add_run_email_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Explicitly allow the email summary step to read the configured Gmail/IMAP mailbox.",
     )
+    parser.add_argument("--email-delivery", choices=("hermes", "email"), default=email_summary.DEFAULT_DELIVERY)
+    parser.add_argument("--email-smtp-host", default="")
+    parser.add_argument("--email-smtp-port", type=int, default=0)
+    parser.add_argument("--email-smtp-user", default="")
+    parser.add_argument("--email-smtp-pass", default="")
+    parser.add_argument("--email-smtp-from", default="")
+    parser.add_argument("--email-smtp-to", default="")
+    parser.add_argument("--email-smtp-starttls", action="store_true")
+    parser.add_argument("--email-smtp-no-ssl", action="store_true")
+    parser.add_argument("--email-smtp-no-tls-verify", action="store_true")
+    parser.add_argument("--email-smtp-timeout", type=int, default=0)
 
 
 def build_parser() -> argparse.ArgumentParser:

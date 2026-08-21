@@ -7,6 +7,7 @@ import argparse
 import contextlib
 import datetime as dt
 import email
+import html as html_lib
 import html.parser
 import ipaddress
 import imaplib
@@ -36,7 +37,8 @@ from email import brief_agent, evidence_agent, graph as email_graph
 from email.io import atomic_write_json
 from email.need_store import empty_need_store
 from email.schemas import EmailEvidencePack
-from podsum_core.delivery import run_hermes_prompt, send_hermes_file
+from podsum_core.delivery import run_hermes_prompt, send_hermes_file, send_smtp_email
+from podsum_core.epub_converter.markdown_processor import MarkdownProcessor
 
 
 DEFAULT_OUTPUT_DIR = Path.home() / "Podcasts/AutoDownloads"
@@ -48,6 +50,9 @@ DEFAULT_TOPIC_FILE = Path(__file__).with_name("topic.md")
 DEFAULT_STATE_FILE = podsum_runtime.podsum_home() / "state.json"
 DEFAULT_HERMES = sender.DEFAULT_HERMES
 DEFAULT_TARGET = sender.DEFAULT_TARGET
+DEFAULT_DELIVERY = "hermes"
+DEFAULT_SMTP_PORT = 465
+DEFAULT_SMTP_TIMEOUT = 30
 load_env_file = podsum_runtime.load_env_file
 config_value = podsum_runtime.config_value
 parse_bool = podsum_runtime.parse_bool
@@ -193,6 +198,99 @@ def now_stamp() -> str:
 
 def today_string() -> str:
     return dt.datetime.now().strftime("%Y-%m-%d")
+
+
+def split_recipients(value: str) -> list[str]:
+    return [item.strip() for item in re.split(r"[,;\s]+", value or "") if item.strip()]
+
+
+def infer_smtp_host(imap_host: str, user: str = "") -> str:
+    host = (imap_host or "").strip()
+    if host.startswith("imap."):
+        return "smtp." + host[len("imap.") :]
+    if "imap" in host:
+        return host.replace("imap", "smtp", 1)
+    domain = user.rsplit("@", 1)[-1] if "@" in user else ""
+    if domain:
+        return f"smtp.{domain}"
+    return ""
+
+
+def smtp_config(args: argparse.Namespace) -> dict[str, Any]:
+    env_file = load_env_file(args.env_file)
+    imap_host = args.imap_host or config_value(env_file, "PODSUM_EMAIL_IMAP_HOST", "IMAP_HOST", default=DEFAULT_IMAP_HOST)
+    imap_user = args.imap_user or config_value(env_file, "PODSUM_EMAIL_IMAP_USER", "IMAP_USER", "GMAIL_USER")
+    imap_pass = args.imap_pass or config_value(env_file, "PODSUM_EMAIL_IMAP_PASS", "IMAP_PASS", "GMAIL_APP_PASSWORD")
+    smtp_user = args.smtp_user or config_value(env_file, "PODSUM_EMAIL_SMTP_USER", "SMTP_USER", default=imap_user)
+    smtp_pass = args.smtp_pass or config_value(env_file, "PODSUM_EMAIL_SMTP_PASS", "SMTP_PASS", default=imap_pass)
+    smtp_host = args.smtp_host or config_value(
+        env_file,
+        "PODSUM_EMAIL_SMTP_HOST",
+        "SMTP_HOST",
+        default=infer_smtp_host(imap_host, smtp_user or imap_user),
+    )
+    smtp_port = args.smtp_port or int(config_value(env_file, "PODSUM_EMAIL_SMTP_PORT", "SMTP_PORT", default=str(DEFAULT_SMTP_PORT)))
+    mail_from = args.smtp_from or config_value(env_file, "PODSUM_EMAIL_SMTP_FROM", "SMTP_FROM", default=smtp_user or imap_user)
+    recipient_value = args.smtp_to or config_value(env_file, "PODSUM_EMAIL_SMTP_TO", "EMAIL_TO", "SMTP_TO", default=smtp_user or imap_user)
+    starttls = args.smtp_starttls or parse_bool(config_value(env_file, "PODSUM_EMAIL_SMTP_STARTTLS", "SMTP_STARTTLS", default="false"), False)
+    use_ssl = (
+        not starttls
+        and not args.smtp_no_ssl
+        and parse_bool(config_value(env_file, "PODSUM_EMAIL_SMTP_SSL", "SMTP_SSL", default="true"), True)
+    )
+    tls_verify = not args.smtp_no_tls_verify and parse_bool(config_value(env_file, "PODSUM_EMAIL_SMTP_TLS_VERIFY", "SMTP_TLS_VERIFY", default="true"), True)
+    timeout = args.smtp_timeout or int(config_value(env_file, "PODSUM_EMAIL_SMTP_TIMEOUT", "SMTP_TIMEOUT", default=str(DEFAULT_SMTP_TIMEOUT)))
+    return {
+        "host": smtp_host,
+        "port": smtp_port,
+        "username": smtp_user,
+        "password": smtp_pass,
+        "mail_from": mail_from,
+        "recipients": split_recipients(recipient_value),
+        "use_ssl": use_ssl,
+        "starttls": starttls,
+        "tls_verify": tls_verify,
+        "timeout": timeout,
+    }
+
+
+def email_html_body(markdown_text: str, scan: dict[str, Any], report_path: Path) -> str:
+    generated_at = time.strftime("%Y-%m-%d %H:%M:%S %z")
+    title = f"Podsum Email Brief {scan.get('date', '')}".strip()
+    account = html_lib.escape(str(scan.get("account", "")))
+    window = html_lib.escape(str(scan.get("window", "")))
+    raw_count = html_lib.escape(str(scan.get("raw_count", 0)))
+    source = html_lib.escape(str(report_path))
+    body_html = MarkdownProcessor.markdown_to_html(markdown_text)
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {{ margin: 0; padding: 0; background: #f6f7f9; color: #1f2933; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.55; }}
+    .wrap {{ max-width: 760px; margin: 0 auto; padding: 24px 18px 40px; background: #ffffff; }}
+    .meta {{ margin: 0 0 20px; color: #5f6c7b; font-size: 13px; }}
+    h1, h2, h3 {{ color: #111827; line-height: 1.25; }}
+    h1 {{ font-size: 24px; margin: 0 0 8px; }}
+    h2 {{ font-size: 19px; margin: 26px 0 10px; border-top: 1px solid #e5e7eb; padding-top: 18px; }}
+    h3 {{ font-size: 16px; margin: 18px 0 8px; }}
+    p {{ margin: 0 0 12px; }}
+    ul, ol {{ padding-left: 22px; }}
+    li {{ margin: 6px 0; }}
+    a {{ color: #0f766e; }}
+    code {{ background: #f3f4f6; padding: 1px 4px; border-radius: 4px; }}
+    blockquote {{ margin: 14px 0; padding: 10px 14px; border-left: 3px solid #cbd5e1; color: #475569; background: #f8fafc; }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>{html_lib.escape(title)}</h1>
+    <p class="meta">账号: {account} · 扫描窗口: {window} · 原始邮件数: {raw_count} · 生成时间: {html_lib.escape(generated_at)}<br>源 Markdown: {source}</p>
+    {body_html}
+  </div>
+</body>
+</html>
+"""
 
 
 def clean_text(value: str, limit: int = SNIPPET_CHARS) -> str:
@@ -2467,11 +2565,48 @@ def _read_scan_file(scan_path: Path | None) -> dict[str, Any]:
     return value
 
 
-def send_report(args: argparse.Namespace, report_path: Path, scan: dict[str, Any]) -> Path:
+def send_report(args: argparse.Namespace, report_path: Path, scan: dict[str, Any]) -> Path | None:
     report_text = report_path.read_text(encoding="utf-8", errors="replace")
     checklist = review_checklist(scan, report_text)
     if not args.dry_run and not checklist.get("ready_to_send"):
         raise RuntimeError(f"email brief failed Review Checklist: {', '.join(checklist.get('risks', []))}")
+    delivery = getattr(args, "delivery", DEFAULT_DELIVERY)
+    if delivery == "email":
+        config = smtp_config(args)
+        subject = f"[Podsum] {scan['date']} Email Brief"
+        body = (
+            f"Podsum Email Brief {scan['date']}\n\n"
+            f"账号: {scan.get('account', '')}\n"
+            f"扫描窗口: {scan.get('window', '')}\n"
+            f"原始邮件数: {scan.get('raw_count', 0)}\n"
+            f"源 Markdown: {report_path}\n"
+            f"生成时间: {time.strftime('%Y-%m-%d %H:%M:%S %z')}\n\n"
+            f"{report_text}\n"
+        )
+        html_body = email_html_body(report_text, scan, report_path)
+        if args.dry_run:
+            recipients = ", ".join(config["recipients"]) or "(missing recipient)"
+            log(f"would email HTML summary to {recipients}: {report_path}")
+        else:
+            log(
+                send_smtp_email(
+                    host=config["host"],
+                    port=config["port"],
+                    username=config["username"],
+                    password=config["password"],
+                    mail_from=config["mail_from"],
+                    recipients=config["recipients"],
+                    subject=subject,
+                    body=body,
+                    html_body=html_body,
+                    timeout=config["timeout"],
+                    use_ssl=config["use_ssl"],
+                    starttls=config["starttls"],
+                    tls_verify=config["tls_verify"],
+                )
+            )
+        return None
+
     epub_path = sender.write_epub(report_path, f"Podsum Email Summary {scan['date']}")
     message = (
         "[[as_document]]\n"
@@ -2572,6 +2707,17 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--enrich-links", action="store_true")
     parser.add_argument("--project-dir", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--target", default=DEFAULT_TARGET)
+    parser.add_argument("--delivery", choices=("hermes", "email"), default=DEFAULT_DELIVERY)
+    parser.add_argument("--smtp-host", default="")
+    parser.add_argument("--smtp-port", type=int, default=0)
+    parser.add_argument("--smtp-user", default="")
+    parser.add_argument("--smtp-pass", default="")
+    parser.add_argument("--smtp-from", default="")
+    parser.add_argument("--smtp-to", default="")
+    parser.add_argument("--smtp-starttls", action="store_true")
+    parser.add_argument("--smtp-no-ssl", action="store_true")
+    parser.add_argument("--smtp-no-tls-verify", action="store_true")
+    parser.add_argument("--smtp-timeout", type=int, default=0)
     parser.add_argument("--hermes", type=Path, default=DEFAULT_HERMES)
     parser.add_argument("--hermes-timeout", type=int, default=180)
     parser.add_argument("--no-llm-evidence-preprocess", action="store_true")
@@ -2593,6 +2739,11 @@ def normalize_args(args: argparse.Namespace) -> None:
     args.email_topic_file = args.email_topic_file.expanduser()
     args.project_dir = args.project_dir.expanduser()
     args.hermes = args.hermes.expanduser()
+    args.delivery = getattr(args, "delivery", DEFAULT_DELIVERY)
+    if args.smtp_port < 0:
+        raise SystemExit("--smtp-port must be >= 0")
+    if args.smtp_timeout < 0:
+        raise SystemExit("--smtp-timeout must be >= 0")
     if args.scan_file:
         args.scan_file = args.scan_file.expanduser()
     if args.eml_dir:
