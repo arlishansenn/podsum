@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import json
 import os
 import shlex
@@ -13,7 +14,7 @@ import urllib.request
 import unittest
 from email.message import EmailMessage
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +23,7 @@ OUTPUTS_README = ROOT / "outputs" / "README.md"
 PODSUM = ROOT / "outputs" / "podsum.py"
 sys.path.insert(0, str(ROOT / "outputs"))
 import podsum  # noqa: E402
+import podsum_email_fixture_tool as fixture_tool  # noqa: E402
 import podsum_email_summary as email_summary  # noqa: E402
 import podsum_email_workbench as email_workbench  # noqa: E402
 import podsum_runtime  # noqa: E402
@@ -4598,10 +4600,12 @@ class FakeImapServer:
     这一层假服务器足以把它钉住。
     """
 
-    def __init__(self, mailboxes: dict[str, dict[str, bytes]]) -> None:
+    def __init__(self, mailboxes: dict[str, dict[str, bytes]], search_status: str = "OK") -> None:
         self.mailboxes = mailboxes
+        self.search_status = search_status
         self.selected: list[str] = []
         self.current = ""
+        self.logged_out = False
 
     def __call__(self, host: str, port: int, ssl_context: Any = None) -> "FakeImapServer":
         return self
@@ -4619,12 +4623,13 @@ class FakeImapServer:
     def uid(self, command: str, *args: Any) -> tuple[str, Any]:
         messages = self.mailboxes[self.current]
         if command == "SEARCH":
-            return ("OK", [" ".join(messages).encode("ascii")])
+            return (self.search_status, [" ".join(messages).encode("ascii")])
         if command == "FETCH":
             return ("OK", [(b"1 (RFC822)", messages[args[0]])])
         raise AssertionError(f"unexpected IMAP command: {command}")
 
     def logout(self) -> tuple[str, list[bytes]]:
+        self.logged_out = True
         return ("BYE", [b""])
 
 
@@ -4641,32 +4646,38 @@ class ImapMailboxScanTest(unittest.TestCase):
         message.set_content("hello")
         return message.as_bytes()
 
-    def _scan(self, mailboxes: dict[str, dict[str, bytes]], mailbox_config: str) -> tuple[dict[str, Any], FakeImapServer]:
-        server = FakeImapServer(mailboxes)
-        args = argparse.Namespace(
+    @staticmethod
+    def _args(mailbox: str, limit: int = 50) -> argparse.Namespace:
+        return argparse.Namespace(
             env_file=Path("/nonexistent/.env"),
             imap_host="imap.example.invalid",
             imap_port=993,
             imap_user="me@example.invalid",
             imap_pass="secret",
-            mailbox="",
+            mailbox=mailbox,
             recent_days=1,
-            limit=50,
+            limit=limit,
         )
-        saved = {name: os.environ.get(name) for name in self.IMAP_ENV_NAMES}
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _patched_imap(server: FakeImapServer) -> Iterator[None]:
         old_ssl = email_summary.imaplib.IMAP4_SSL
-        os.environ["PODSUM_EMAIL_IMAP_MAILBOX"] = mailbox_config
-        os.environ.pop("IMAP_MAILBOX", None)
         email_summary.imaplib.IMAP4_SSL = server
         try:
-            scan = email_summary.scan_imap(args, email_summary.DEFAULT_POLICY)
+            yield
         finally:
             email_summary.imaplib.IMAP4_SSL = old_ssl
-            for name, value in saved.items():
-                if value is None:
-                    os.environ.pop(name, None)
-                else:
-                    os.environ[name] = value
+
+    def _scan(
+        self,
+        mailboxes: dict[str, dict[str, bytes]],
+        mailbox: str,
+        limit: int = 50,
+    ) -> tuple[dict[str, Any], FakeImapServer]:
+        server = FakeImapServer(mailboxes)
+        with self._patched_imap(server):
+            scan = email_summary.scan_imap(self._args(mailbox, limit), email_summary.DEFAULT_POLICY)
         return scan, server
 
     def test_parse_mailboxes_splits_commas_and_defaults_to_inbox(self) -> None:
@@ -4716,31 +4727,95 @@ class ImapMailboxScanTest(unittest.TestCase):
 
     def test_scan_imap_truncation_needs_one_mailbox_to_hit_the_limit(self) -> None:
         # 合计和 limit 比会误报：两个都没满的 mailbox 加起来也能越过 limit。
-        server = FakeImapServer(
+        scan, _ = self._scan(
             {
                 "INBOX": {str(uid): self._raw_email(f"inbox {uid}") for uid in range(1, 4)},
                 "Junk": {str(uid): self._raw_email(f"junk {uid}") for uid in range(1, 4)},
-            }
-        )
-        args = argparse.Namespace(
-            env_file=Path("/nonexistent/.env"),
-            imap_host="imap.example.invalid",
-            imap_port=993,
-            imap_user="me@example.invalid",
-            imap_pass="secret",
-            mailbox="INBOX,Junk",
-            recent_days=1,
+            },
+            "INBOX,Junk",
             limit=4,
         )
-        old_ssl = email_summary.imaplib.IMAP4_SSL
-        email_summary.imaplib.IMAP4_SSL = server
-        try:
-            scan = email_summary.scan_imap(args, email_summary.DEFAULT_POLICY)
-        finally:
-            email_summary.imaplib.IMAP4_SSL = old_ssl
 
         self.assertEqual(scan["raw_count"], 6)
         self.assertFalse(scan["possibly_truncated"])
+
+    def test_scan_imap_truncation_fires_when_one_mailbox_fills_the_limit(self) -> None:
+        scan, _ = self._scan(
+            {
+                "INBOX": {str(uid): self._raw_email(f"inbox {uid}") for uid in range(1, 4)},
+                "Junk": {"9": self._raw_email("junk nine")},
+            },
+            "INBOX,Junk",
+            limit=3,
+        )
+
+        self.assertTrue(scan["possibly_truncated"])
+
+    def test_scan_imap_reads_the_mailbox_list_from_configuration(self) -> None:
+        # 生产里 mailbox 来自 .env / 环境变量，不是命令行，这条守住那段解析。
+        server = FakeImapServer(
+            {
+                "INBOX": {"1": self._raw_email("inbox subject")},
+                "Junk": {"2": self._raw_email("junk subject")},
+            }
+        )
+        saved = {name: os.environ.get(name) for name in ("PODSUM_EMAIL_IMAP_MAILBOX", "IMAP_MAILBOX")}
+        os.environ["PODSUM_EMAIL_IMAP_MAILBOX"] = "INBOX,Junk"
+        os.environ.pop("IMAP_MAILBOX", None)
+        try:
+            with self._patched_imap(server):
+                scan = email_summary.scan_imap(self._args(""), email_summary.DEFAULT_POLICY)
+        finally:
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+        self.assertEqual(scan["mailboxes"], ["INBOX", "Junk"])
+        self.assertEqual(server.selected, ["INBOX", "Junk"])
+
+    def test_fetch_raw_messages_covers_every_mailbox(self) -> None:
+        # fixture capture 和 scan 共用同一段取信逻辑，多 mailbox 的配置这边也得跟上。
+        server = FakeImapServer(
+            {
+                "INBOX": {"1": self._raw_email("inbox subject")},
+                "Junk": {"2": self._raw_email("junk subject")},
+            }
+        )
+        with self._patched_imap(server):
+            raw_messages = fixture_tool.fetch_raw_messages(self._args("INBOX,Junk", limit=20))
+
+        self.assertEqual(server.selected, ["INBOX", "Junk"])
+        self.assertEqual(
+            raw_messages,
+            [server.mailboxes["INBOX"]["1"], server.mailboxes["Junk"]["2"]],
+        )
+
+    def test_scan_imap_reports_a_mailbox_it_cannot_select(self) -> None:
+        # 选不中就静默返回空扫描的话，Junk 配错名字会伪装成「今天没邮件」。
+        with self.assertRaises(RuntimeError) as raised:
+            self._scan({"INBOX": {"1": self._raw_email("inbox subject")}}, "INBOX,Junnk")
+
+        self.assertIn("Junnk", str(raised.exception))
+
+    def test_scan_imap_reports_which_mailbox_failed_the_search(self) -> None:
+        server = FakeImapServer({"INBOX": {"1": self._raw_email("inbox subject")}}, search_status="NO")
+        with self.assertRaises(RuntimeError) as raised:
+            with self._patched_imap(server):
+                email_summary.scan_imap(self._args("INBOX"), email_summary.DEFAULT_POLICY)
+
+        self.assertIn("INBOX", str(raised.exception))
+
+    def test_imap_session_logs_out_when_the_body_raises(self) -> None:
+        server = FakeImapServer({"INBOX": {}})
+        settings = email_summary.imap_settings(self._args("INBOX"))
+        with self._patched_imap(server):
+            with self.assertRaises(RuntimeError):
+                with email_summary.imap_session(settings):
+                    raise RuntimeError("boom")
+
+        self.assertTrue(server.logged_out)
 
 
 if __name__ == "__main__":

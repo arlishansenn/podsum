@@ -25,7 +25,7 @@ import urllib.parse
 import urllib.request
 from email.message import Message
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator, NamedTuple
 
 import podsum_runtime
 import podsum_send_to_feishu as sender
@@ -1578,6 +1578,27 @@ def append_review_checklist(markdown: str, scan: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+class ImapSettings(NamedTuple):
+    host: str
+    port: int
+    user: str
+    password: str
+    mailboxes: list[str]
+    tls_verify: bool
+
+
+class MailboxMessages(NamedTuple):
+    """一个 mailbox 里取回的原始邮件。
+
+    `uid_count` 是 SEARCH 命中的总数，比取回的封数多就说明 limit 把尾巴切掉了；
+    截断判断只能按 mailbox 各自算，合计跟 limit 比会让两个都没满的文件夹加出假警报。
+    """
+
+    mailbox: str
+    uid_count: int
+    messages: list[tuple[str, bytes]]
+
+
 def parse_mailboxes(value: str) -> list[str]:
     """mailbox 配置是逗号分隔列表。
 
@@ -1592,66 +1613,100 @@ def parse_mailboxes(value: str) -> list[str]:
     return names or [DEFAULT_MAILBOX]
 
 
-def scan_imap(args: argparse.Namespace, policy: dict[str, Any]) -> dict[str, Any]:
-    env_file = load_env_file(args.env_file)
-    host = args.imap_host or config_value(env_file, "PODSUM_EMAIL_IMAP_HOST", "IMAP_HOST", default=DEFAULT_IMAP_HOST)
-    port = args.imap_port or int(config_value(env_file, "PODSUM_EMAIL_IMAP_PORT", "IMAP_PORT", default=str(DEFAULT_IMAP_PORT)))
-    user = args.imap_user or config_value(env_file, "PODSUM_EMAIL_IMAP_USER", "IMAP_USER", "GMAIL_USER")
-    password = args.imap_pass or config_value(env_file, "PODSUM_EMAIL_IMAP_PASS", "IMAP_PASS", "GMAIL_APP_PASSWORD")
-    mailboxes = parse_mailboxes(
-        args.mailbox or config_value(env_file, "PODSUM_EMAIL_IMAP_MAILBOX", "IMAP_MAILBOX", default=DEFAULT_MAILBOX)
-    )
-    tls_verify = parse_bool(config_value(env_file, "PODSUM_EMAIL_IMAP_TLS_VERIFY", "IMAP_REJECT_UNAUTHORIZED", default="true"), True)
+def imap_settings(args: argparse.Namespace) -> ImapSettings:
+    """解析 IMAP 连接配置。
 
-    if not user or not password:
+    scan 和 fixture capture 读同一批配置键，解析只写在这里，两边不会再各自跑偏。
+    """
+    env_file = load_env_file(args.env_file)
+    settings = ImapSettings(
+        host=args.imap_host or config_value(env_file, "PODSUM_EMAIL_IMAP_HOST", "IMAP_HOST", default=DEFAULT_IMAP_HOST),
+        port=args.imap_port or int(config_value(env_file, "PODSUM_EMAIL_IMAP_PORT", "IMAP_PORT", default=str(DEFAULT_IMAP_PORT))),
+        user=args.imap_user or config_value(env_file, "PODSUM_EMAIL_IMAP_USER", "IMAP_USER", "GMAIL_USER"),
+        password=args.imap_pass or config_value(env_file, "PODSUM_EMAIL_IMAP_PASS", "IMAP_PASS", "GMAIL_APP_PASSWORD"),
+        mailboxes=parse_mailboxes(
+            args.mailbox or config_value(env_file, "PODSUM_EMAIL_IMAP_MAILBOX", "IMAP_MAILBOX", default=DEFAULT_MAILBOX)
+        ),
+        tls_verify=parse_bool(config_value(env_file, "PODSUM_EMAIL_IMAP_TLS_VERIFY", "IMAP_REJECT_UNAUTHORIZED", default="true"), True),
+    )
+    if not settings.user or not settings.password:
         raise RuntimeError(
             "missing IMAP credentials: set PODSUM_EMAIL_IMAP_USER/"
             f"PODSUM_EMAIL_IMAP_PASS in {args.env_file}"
         )
+    return settings
 
+
+@contextlib.contextmanager
+def imap_session(settings: ImapSettings) -> Iterator[imaplib.IMAP4]:
     context = ssl.create_default_context()
-    if not tls_verify:
+    if not settings.tls_verify:
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
-
-    since = (dt.datetime.now() - dt.timedelta(days=args.recent_days)).strftime("%d-%b-%Y")
-    items: list[dict[str, Any]] = []
-    raw_counts: list[int] = []
-    imap = imaplib.IMAP4_SSL(host, port, ssl_context=context)
+    imap = imaplib.IMAP4_SSL(settings.host, settings.port, ssl_context=context)
     try:
-        imap.login(user, password)
-        for mailbox in mailboxes:
-            status, _ = imap.select(mailbox, readonly=True)
-            if status != "OK":
-                raise RuntimeError(f"failed to select mailbox: {mailbox}")
-            status, data = imap.uid("SEARCH", None, "SINCE", since)
-            if status != "OK":
-                raise RuntimeError(f"IMAP search failed in mailbox: {mailbox}")
-            uids = data[0].split() if data and data[0] else []
-            raw_counts.append(len(uids))
-            for uid_bytes in uids[-args.limit :]:
-                uid = uid_bytes.decode("ascii", errors="replace")
-                status, fetched = imap.uid("FETCH", uid, "(RFC822)")
-                if status != "OK" or not fetched:
-                    continue
-                for part in fetched:
-                    if isinstance(part, tuple) and len(part) >= 2:
-                        # UID 只在自己的 mailbox 里唯一，跨文件夹会撞号；多 mailbox 时加前缀，
-                        # 单 mailbox 保持裸 UID，下游的 email:// 链接和 topic item_uids 就不变。
-                        scoped_uid = f"{mailbox}:{uid}" if len(mailboxes) > 1 else uid
-                        item = message_item(scoped_uid, part[1], policy)
-                        item["mailbox"] = mailbox
-                        items.append(item)
-                        break
+        imap.login(settings.user, settings.password)
+        yield imap
     finally:
+        # logout 失败不该盖掉正在往外抛的真错误。
         with contextlib.suppress(Exception):
             imap.logout()
 
-    scan = scan_payload(user, args.recent_days, args.limit, sum(raw_counts), items)
-    # limit 是每个 mailbox 各自取尾部，所以只有某个 mailbox 自己触顶才叫可能有遗漏；
-    # 拿合计跟 limit 比会让两个都没满的 mailbox 加出一个假警报。
-    scan["possibly_truncated"] = any(count >= args.limit for count in raw_counts)
-    scan["mailboxes"] = mailboxes
+
+def imap_search_since(recent_days: int) -> str:
+    return (dt.datetime.now() - dt.timedelta(days=recent_days)).strftime("%d-%b-%Y")
+
+
+def fetch_mailbox_messages(imap: imaplib.IMAP4, mailboxes: list[str], since: str, limit: int) -> list[MailboxMessages]:
+    """逐个 mailbox 取最近 `limit` 封原始邮件，按 mailbox 分组返回。
+
+    limit 是每个 mailbox 各自取尾部，不是全部 mailbox 合起来的额度。
+    UID 只在自己的 mailbox 里唯一，跨文件夹会撞号，所以分组保留 mailbox 名，
+    由调用方决定要不要给 UID 加前缀。
+
+    原始邮件整批留在内存里，上限是 limit × mailbox 数；limit 默认 300 够用，
+    真要扫到上万封再改成流式。
+    """
+    groups: list[MailboxMessages] = []
+    for mailbox in mailboxes:
+        status, _ = imap.select(mailbox, readonly=True)
+        if status != "OK":
+            raise RuntimeError(f"failed to select mailbox: {mailbox}")
+        status, data = imap.uid("SEARCH", None, "SINCE", since)
+        if status != "OK":
+            raise RuntimeError(f"IMAP search failed in mailbox: {mailbox}")
+        uids = data[0].split() if data and data[0] else []
+        messages: list[tuple[str, bytes]] = []
+        for uid_bytes in uids[-limit:]:
+            uid = uid_bytes.decode("ascii", errors="replace")
+            status, fetched = imap.uid("FETCH", uid, "(RFC822)")
+            if status != "OK" or not fetched:
+                continue
+            for part in fetched:
+                if isinstance(part, tuple) and len(part) >= 2:
+                    messages.append((uid, part[1]))
+                    break
+        groups.append(MailboxMessages(mailbox, len(uids), messages))
+    return groups
+
+
+def scan_imap(args: argparse.Namespace, policy: dict[str, Any]) -> dict[str, Any]:
+    settings = imap_settings(args)
+    with imap_session(settings) as imap:
+        groups = fetch_mailbox_messages(imap, settings.mailboxes, imap_search_since(args.recent_days), args.limit)
+
+    multi_mailbox = len(settings.mailboxes) > 1
+    items: list[dict[str, Any]] = []
+    for group in groups:
+        for uid, raw_message in group.messages:
+            # 单 mailbox 保持裸 UID，下游的 email:// 链接和 topic item_uids 就不变。
+            item = message_item(f"{group.mailbox}:{uid}" if multi_mailbox else uid, raw_message, policy)
+            item["mailbox"] = group.mailbox
+            items.append(item)
+
+    scan = scan_payload(settings.user, args.recent_days, args.limit, sum(group.uid_count for group in groups), items)
+    scan["possibly_truncated"] = any(group.uid_count >= args.limit for group in groups)
+    scan["mailboxes"] = settings.mailboxes
     return scan
 
 
