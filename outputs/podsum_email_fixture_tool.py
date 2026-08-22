@@ -4,13 +4,10 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import datetime as dt
 import email
 import email.utils
-import imaplib
 import re
-import ssl
 from email.message import EmailMessage, Message
 from pathlib import Path
 
@@ -142,48 +139,11 @@ def raw_messages_from_dir(input_dir: Path) -> list[bytes]:
 
 
 def fetch_raw_messages(args: argparse.Namespace) -> list[bytes]:
-    env_file = email_summary.load_env_file(args.env_file)
-    host = args.imap_host or email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_HOST", "IMAP_HOST", default=email_summary.DEFAULT_IMAP_HOST)
-    port = args.imap_port or int(email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_PORT", "IMAP_PORT", default=str(email_summary.DEFAULT_IMAP_PORT)))
-    user = args.imap_user or email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_USER", "IMAP_USER", "GMAIL_USER")
-    password = args.imap_pass or email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_PASS", "IMAP_PASS", "GMAIL_APP_PASSWORD")
-    mailbox = args.mailbox or email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_MAILBOX", "IMAP_MAILBOX", default=email_summary.DEFAULT_MAILBOX)
-    tls_verify = email_summary.parse_bool(email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_TLS_VERIFY", "IMAP_REJECT_UNAUTHORIZED", default="true"), True)
-    if not user or not password:
-        raise RuntimeError(
-            "missing IMAP credentials: set PODSUM_EMAIL_IMAP_USER/"
-            f"PODSUM_EMAIL_IMAP_PASS in {args.env_file}"
-        )
-
-    context = ssl.create_default_context()
-    if not tls_verify:
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-
-    since = (dt.datetime.now() - dt.timedelta(days=args.recent_days)).strftime("%d-%b-%Y")
-    raw_messages: list[bytes] = []
-    imap = imaplib.IMAP4_SSL(host, port, ssl_context=context)
-    try:
-        imap.login(user, password)
-        status, _ = imap.select(mailbox, readonly=True)
-        if status != "OK":
-            raise RuntimeError(f"failed to select mailbox: {mailbox}")
-        status, data = imap.uid("SEARCH", None, "SINCE", since)
-        if status != "OK":
-            raise RuntimeError("IMAP search failed")
-        uids = data[0].split() if data and data[0] else []
-        for uid in uids[-args.limit :]:
-            status, fetched = imap.uid("FETCH", uid, "(RFC822)")
-            if status != "OK" or not fetched:
-                continue
-            for part in fetched:
-                if isinstance(part, tuple) and len(part) >= 2:
-                    raw_messages.append(part[1])
-                    break
-    finally:
-        with contextlib.suppress(Exception):
-            imap.logout()
-    return raw_messages
+    settings = email_summary.imap_settings(args)
+    since = email_summary.imap_search_since(args.recent_days)
+    with email_summary.imap_session(settings) as imap:
+        groups = email_summary.fetch_mailbox_messages(imap, settings.mailboxes, since, args.limit)
+    return [raw_message for group in groups for _uid, raw_message in group.messages]
 
 
 def redact(args: argparse.Namespace) -> int:
