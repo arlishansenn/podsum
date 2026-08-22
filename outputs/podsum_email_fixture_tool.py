@@ -147,7 +147,9 @@ def fetch_raw_messages(args: argparse.Namespace) -> list[bytes]:
     port = args.imap_port or int(email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_PORT", "IMAP_PORT", default=str(email_summary.DEFAULT_IMAP_PORT)))
     user = args.imap_user or email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_USER", "IMAP_USER", "GMAIL_USER")
     password = args.imap_pass or email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_PASS", "IMAP_PASS", "GMAIL_APP_PASSWORD")
-    mailbox = args.mailbox or email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_MAILBOX", "IMAP_MAILBOX", default=email_summary.DEFAULT_MAILBOX)
+    mailboxes = email_summary.parse_mailboxes(
+        args.mailbox or email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_MAILBOX", "IMAP_MAILBOX", default=email_summary.DEFAULT_MAILBOX)
+    )
     tls_verify = email_summary.parse_bool(email_summary.config_value(env_file, "PODSUM_EMAIL_IMAP_TLS_VERIFY", "IMAP_REJECT_UNAUTHORIZED", default="true"), True)
     if not user or not password:
         raise RuntimeError(
@@ -165,21 +167,24 @@ def fetch_raw_messages(args: argparse.Namespace) -> list[bytes]:
     imap = imaplib.IMAP4_SSL(host, port, ssl_context=context)
     try:
         imap.login(user, password)
-        status, _ = imap.select(mailbox, readonly=True)
-        if status != "OK":
-            raise RuntimeError(f"failed to select mailbox: {mailbox}")
-        status, data = imap.uid("SEARCH", None, "SINCE", since)
-        if status != "OK":
-            raise RuntimeError("IMAP search failed")
-        uids = data[0].split() if data and data[0] else []
-        for uid in uids[-args.limit :]:
-            status, fetched = imap.uid("FETCH", uid, "(RFC822)")
-            if status != "OK" or not fetched:
-                continue
-            for part in fetched:
-                if isinstance(part, tuple) and len(part) >= 2:
-                    raw_messages.append(part[1])
-                    break
+        # 和 scan_imap 读同一个配置键，那边支持逗号分隔多 mailbox，这边不跟就会
+        # 拿 "INBOX,Junk" 当成一个文件夹名去 select，capture 直接失败。
+        for mailbox in mailboxes:
+            status, _ = imap.select(mailbox, readonly=True)
+            if status != "OK":
+                raise RuntimeError(f"failed to select mailbox: {mailbox}")
+            status, data = imap.uid("SEARCH", None, "SINCE", since)
+            if status != "OK":
+                raise RuntimeError(f"IMAP search failed in mailbox: {mailbox}")
+            uids = data[0].split() if data and data[0] else []
+            for uid in uids[-args.limit :]:
+                status, fetched = imap.uid("FETCH", uid, "(RFC822)")
+                if status != "OK" or not fetched:
+                    continue
+                for part in fetched:
+                    if isinstance(part, tuple) and len(part) >= 2:
+                        raw_messages.append(part[1])
+                        break
     finally:
         with contextlib.suppress(Exception):
             imap.logout()

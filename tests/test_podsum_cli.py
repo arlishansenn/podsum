@@ -4591,5 +4591,157 @@ class EditableFilesDocTest(unittest.TestCase):
                 self.assertIn(flag, help_text)
 
 
+class FakeImapServer:
+    """IMAP4_SSL 的最小子集：按 mailbox 存 uid -> 原始邮件。
+
+    真实 IMAP 不可测，但多 mailbox 的合并逻辑全在 select/SEARCH 的循环里，
+    这一层假服务器足以把它钉住。
+    """
+
+    def __init__(self, mailboxes: dict[str, dict[str, bytes]]) -> None:
+        self.mailboxes = mailboxes
+        self.selected: list[str] = []
+        self.current = ""
+
+    def __call__(self, host: str, port: int, ssl_context: Any = None) -> "FakeImapServer":
+        return self
+
+    def login(self, user: str, password: str) -> tuple[str, list[bytes]]:
+        return ("OK", [b""])
+
+    def select(self, mailbox: str, readonly: bool = False) -> tuple[str, list[bytes]]:
+        if mailbox not in self.mailboxes:
+            return ("NO", [b"no such mailbox"])
+        self.current = mailbox
+        self.selected.append(mailbox)
+        return ("OK", [b"1"])
+
+    def uid(self, command: str, *args: Any) -> tuple[str, Any]:
+        messages = self.mailboxes[self.current]
+        if command == "SEARCH":
+            return ("OK", [" ".join(messages).encode("ascii")])
+        if command == "FETCH":
+            return ("OK", [(b"1 (RFC822)", messages[args[0]])])
+        raise AssertionError(f"unexpected IMAP command: {command}")
+
+    def logout(self) -> tuple[str, list[bytes]]:
+        return ("BYE", [b""])
+
+
+class ImapMailboxScanTest(unittest.TestCase):
+    IMAP_ENV_NAMES = ("PODSUM_EMAIL_IMAP_MAILBOX", "IMAP_MAILBOX", "PODSUM_EMAIL_IMAP_TLS_VERIFY")
+
+    @staticmethod
+    def _raw_email(subject: str) -> bytes:
+        message = EmailMessage()
+        message["From"] = "sender@example.invalid"
+        message["To"] = "me@example.invalid"
+        message["Subject"] = subject
+        message["Date"] = "Mon, 01 Jun 2026 10:00:00 +0000"
+        message.set_content("hello")
+        return message.as_bytes()
+
+    def _scan(self, mailboxes: dict[str, dict[str, bytes]], mailbox_config: str) -> tuple[dict[str, Any], FakeImapServer]:
+        server = FakeImapServer(mailboxes)
+        args = argparse.Namespace(
+            env_file=Path("/nonexistent/.env"),
+            imap_host="imap.example.invalid",
+            imap_port=993,
+            imap_user="me@example.invalid",
+            imap_pass="secret",
+            mailbox="",
+            recent_days=1,
+            limit=50,
+        )
+        saved = {name: os.environ.get(name) for name in self.IMAP_ENV_NAMES}
+        old_ssl = email_summary.imaplib.IMAP4_SSL
+        os.environ["PODSUM_EMAIL_IMAP_MAILBOX"] = mailbox_config
+        os.environ.pop("IMAP_MAILBOX", None)
+        email_summary.imaplib.IMAP4_SSL = server
+        try:
+            scan = email_summary.scan_imap(args, email_summary.DEFAULT_POLICY)
+        finally:
+            email_summary.imaplib.IMAP4_SSL = old_ssl
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+        return scan, server
+
+    def test_parse_mailboxes_splits_commas_and_defaults_to_inbox(self) -> None:
+        self.assertEqual(email_summary.parse_mailboxes("INBOX"), ["INBOX"])
+        self.assertEqual(email_summary.parse_mailboxes("INBOX,Junk"), ["INBOX", "Junk"])
+        self.assertEqual(email_summary.parse_mailboxes(" INBOX , Junk , "), ["INBOX", "Junk"])
+        self.assertEqual(email_summary.parse_mailboxes("INBOX,INBOX"), ["INBOX"])
+        self.assertEqual(email_summary.parse_mailboxes(""), ["INBOX"])
+
+    def test_scan_imap_merges_items_from_every_configured_mailbox(self) -> None:
+        scan, server = self._scan(
+            {
+                "INBOX": {"1": self._raw_email("inbox subject")},
+                "Junk": {"9": self._raw_email("junk subject")},
+            },
+            "INBOX,Junk",
+        )
+
+        self.assertEqual(server.selected, ["INBOX", "Junk"])
+        self.assertEqual(scan["mailboxes"], ["INBOX", "Junk"])
+        self.assertEqual(scan["raw_count"], 2)
+        self.assertEqual(
+            [item["subject"] for item in scan["items"]],
+            ["inbox subject", "junk subject"],
+        )
+        self.assertEqual([item["mailbox"] for item in scan["items"]], ["INBOX", "Junk"])
+
+    def test_scan_imap_keeps_same_uid_from_two_mailboxes_distinct(self) -> None:
+        scan, _ = self._scan(
+            {
+                "INBOX": {"7": self._raw_email("inbox seven")},
+                "Junk": {"7": self._raw_email("junk seven")},
+            },
+            "INBOX,Junk",
+        )
+
+        self.assertEqual([item["uid"] for item in scan["items"]], ["INBOX:7", "Junk:7"])
+
+    def test_scan_imap_single_mailbox_keeps_bare_uid_and_records_mailbox(self) -> None:
+        scan, server = self._scan({"INBOX": {"5": self._raw_email("only subject")}}, "INBOX")
+
+        self.assertEqual(server.selected, ["INBOX"])
+        self.assertEqual(scan["mailboxes"], ["INBOX"])
+        self.assertEqual([item["uid"] for item in scan["items"]], ["5"])
+        self.assertEqual([item["mailbox"] for item in scan["items"]], ["INBOX"])
+        self.assertFalse(scan["possibly_truncated"])
+
+    def test_scan_imap_truncation_needs_one_mailbox_to_hit_the_limit(self) -> None:
+        # 合计和 limit 比会误报：两个都没满的 mailbox 加起来也能越过 limit。
+        server = FakeImapServer(
+            {
+                "INBOX": {str(uid): self._raw_email(f"inbox {uid}") for uid in range(1, 4)},
+                "Junk": {str(uid): self._raw_email(f"junk {uid}") for uid in range(1, 4)},
+            }
+        )
+        args = argparse.Namespace(
+            env_file=Path("/nonexistent/.env"),
+            imap_host="imap.example.invalid",
+            imap_port=993,
+            imap_user="me@example.invalid",
+            imap_pass="secret",
+            mailbox="INBOX,Junk",
+            recent_days=1,
+            limit=4,
+        )
+        old_ssl = email_summary.imaplib.IMAP4_SSL
+        email_summary.imaplib.IMAP4_SSL = server
+        try:
+            scan = email_summary.scan_imap(args, email_summary.DEFAULT_POLICY)
+        finally:
+            email_summary.imaplib.IMAP4_SSL = old_ssl
+
+        self.assertEqual(scan["raw_count"], 6)
+        self.assertFalse(scan["possibly_truncated"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1578,13 +1578,29 @@ def append_review_checklist(markdown: str, scan: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def parse_mailboxes(value: str) -> list[str]:
+    """mailbox 配置是逗号分隔列表。
+
+    exmail 的反垃圾把订阅邮件整批扔进 Junk，只扫 INBOX 会静默漏掉一半 brief 素材。
+    单值写法保持原样，所以老配置不用改。
+    """
+    names: list[str] = []
+    for name in value.split(","):
+        name = name.strip()
+        if name and name not in names:
+            names.append(name)
+    return names or [DEFAULT_MAILBOX]
+
+
 def scan_imap(args: argparse.Namespace, policy: dict[str, Any]) -> dict[str, Any]:
     env_file = load_env_file(args.env_file)
     host = args.imap_host or config_value(env_file, "PODSUM_EMAIL_IMAP_HOST", "IMAP_HOST", default=DEFAULT_IMAP_HOST)
     port = args.imap_port or int(config_value(env_file, "PODSUM_EMAIL_IMAP_PORT", "IMAP_PORT", default=str(DEFAULT_IMAP_PORT)))
     user = args.imap_user or config_value(env_file, "PODSUM_EMAIL_IMAP_USER", "IMAP_USER", "GMAIL_USER")
     password = args.imap_pass or config_value(env_file, "PODSUM_EMAIL_IMAP_PASS", "IMAP_PASS", "GMAIL_APP_PASSWORD")
-    mailbox = args.mailbox or config_value(env_file, "PODSUM_EMAIL_IMAP_MAILBOX", "IMAP_MAILBOX", default=DEFAULT_MAILBOX)
+    mailboxes = parse_mailboxes(
+        args.mailbox or config_value(env_file, "PODSUM_EMAIL_IMAP_MAILBOX", "IMAP_MAILBOX", default=DEFAULT_MAILBOX)
+    )
     tls_verify = parse_bool(config_value(env_file, "PODSUM_EMAIL_IMAP_TLS_VERIFY", "IMAP_REJECT_UNAUTHORIZED", default="true"), True)
 
     if not user or not password:
@@ -1600,31 +1616,43 @@ def scan_imap(args: argparse.Namespace, policy: dict[str, Any]) -> dict[str, Any
 
     since = (dt.datetime.now() - dt.timedelta(days=args.recent_days)).strftime("%d-%b-%Y")
     items: list[dict[str, Any]] = []
+    raw_counts: list[int] = []
     imap = imaplib.IMAP4_SSL(host, port, ssl_context=context)
     try:
         imap.login(user, password)
-        status, _ = imap.select(mailbox, readonly=True)
-        if status != "OK":
-            raise RuntimeError(f"failed to select mailbox: {mailbox}")
-        status, data = imap.uid("SEARCH", None, "SINCE", since)
-        if status != "OK":
-            raise RuntimeError("IMAP search failed")
-        uids = data[0].split() if data and data[0] else []
-        selected = uids[-args.limit :]
-        for uid_bytes in selected:
-            uid = uid_bytes.decode("ascii", errors="replace")
-            status, fetched = imap.uid("FETCH", uid, "(RFC822)")
-            if status != "OK" or not fetched:
-                continue
-            for part in fetched:
-                if isinstance(part, tuple) and len(part) >= 2:
-                    items.append(message_item(uid, part[1], policy))
-                    break
+        for mailbox in mailboxes:
+            status, _ = imap.select(mailbox, readonly=True)
+            if status != "OK":
+                raise RuntimeError(f"failed to select mailbox: {mailbox}")
+            status, data = imap.uid("SEARCH", None, "SINCE", since)
+            if status != "OK":
+                raise RuntimeError(f"IMAP search failed in mailbox: {mailbox}")
+            uids = data[0].split() if data and data[0] else []
+            raw_counts.append(len(uids))
+            for uid_bytes in uids[-args.limit :]:
+                uid = uid_bytes.decode("ascii", errors="replace")
+                status, fetched = imap.uid("FETCH", uid, "(RFC822)")
+                if status != "OK" or not fetched:
+                    continue
+                for part in fetched:
+                    if isinstance(part, tuple) and len(part) >= 2:
+                        # UID 只在自己的 mailbox 里唯一，跨文件夹会撞号；多 mailbox 时加前缀，
+                        # 单 mailbox 保持裸 UID，下游的 email:// 链接和 topic item_uids 就不变。
+                        scoped_uid = f"{mailbox}:{uid}" if len(mailboxes) > 1 else uid
+                        item = message_item(scoped_uid, part[1], policy)
+                        item["mailbox"] = mailbox
+                        items.append(item)
+                        break
     finally:
         with contextlib.suppress(Exception):
             imap.logout()
 
-    return scan_payload(user, args.recent_days, args.limit, len(uids), items)
+    scan = scan_payload(user, args.recent_days, args.limit, sum(raw_counts), items)
+    # limit 是每个 mailbox 各自取尾部，所以只有某个 mailbox 自己触顶才叫可能有遗漏；
+    # 拿合计跟 limit 比会让两个都没满的 mailbox 加出一个假警报。
+    scan["possibly_truncated"] = any(count >= args.limit for count in raw_counts)
+    scan["mailboxes"] = mailboxes
+    return scan
 
 
 def scan_eml_dir(args: argparse.Namespace, policy: dict[str, Any]) -> dict[str, Any]:
