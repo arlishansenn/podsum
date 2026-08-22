@@ -4592,6 +4592,21 @@ class EditableFilesDocTest(unittest.TestCase):
             with self.subTest(flag=flag):
                 self.assertIn(flag, help_text)
 
+    def test_section_points_mailbox_scan_at_the_env(self) -> None:
+        """扫描范围不在 policy 文件里，只改 md 会漏掉 Junk。"""
+        section = self._section()
+
+        self.assertIn("PODSUM_EMAIL_IMAP_MAILBOX", section)
+        self.assertIn("INBOX,Junk", section)
+        self.assertIn("exmail", section)
+
+        policy_row = next(
+            line
+            for line in section.splitlines()
+            if line.startswith("|") and "`email_link_policy.md`" in line
+        )
+        self.assertNotIn("PODSUM_EMAIL_IMAP_MAILBOX", policy_row)
+
 
 class FakeImapServer:
     """IMAP4_SSL 的最小子集：按 mailbox 存 uid -> 原始邮件。

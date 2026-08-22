@@ -399,6 +399,8 @@ missing, and it never overwrites one that already exists.
 | `topic.md` | Which topics the brief tracks. Only mail that matches a topic reaches the main sections, so add a topic here to surface something, and reorder priority here to change what leads. |
 | `email_link_policy.md` | How mail is classified and how many links get fetched: 2 links per email, 10 links in total, plus the URL patterns to skip. |
 
+These files do not choose which mailbox folders IMAP scans. That is `PODSUM_EMAIL_IMAP_MAILBOX` in the env file: comma-separated, for example `INBOX,Junk`. exmail users should add `Junk`.
+
 ### Verify a change without rereading the mailbox
 
 Reuse the scan file the last run already wrote, and keep delivery off:
