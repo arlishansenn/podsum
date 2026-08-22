@@ -166,6 +166,15 @@ class EmailSummaryPromptTest(unittest.TestCase):
             with self.subTest(heading=heading):
                 self.assertIn(heading, prompt)
 
+    def test_prompt_forbids_forced_topics_title_dumps_and_notification_in_today(self) -> None:
+        """issue 50：分类跟 topic.md 走；条目是归纳；今天先看不放纯通知。"""
+        prompt = email_summary_prompt_text()
+
+        self.assertIn("匹配不上的进「其他」", prompt)
+        self.assertIn("不要硬塞", prompt)
+        self.assertIn("不要放纯通知类邮件", prompt)
+        self.assertIn("不要写成「标题；正文前 N 字」", prompt)
+
     def test_prompt_states_how_evidence_may_be_used(self) -> None:
         """邮件片段不是正文，扫描可能触达上限——这些边界必须写在 prompt 里。"""
         prompt = email_summary_prompt_text()
@@ -4487,7 +4496,7 @@ class Issue50BriefQualityTest(unittest.TestCase):
     def test_brief_line_is_not_subject_semicolon_excerpt(self) -> None:
         item = self._ai_newsletter()
         markdown = email_summary.build_intel_brief_draft(self._scan(item))
-        line = email_summary.delivery_item_line({"date": "2026-08-21"}, item, "线索")
+        line = email_summary.delivery_item_line({"date": "2026-08-21"}, item)
 
         self.assertNotIn("Software is writing itself；", line)
         self.assertNotIn("Software is writing itself；", markdown)
@@ -4522,7 +4531,8 @@ class Issue50BriefQualityTest(unittest.TestCase):
         markdown = email_summary.build_intel_brief_draft(self._scan(item))
 
         self.assertNotIn("个人选择 / 组织策略", markdown)
-        self.assertIn("### 其他", markdown)
+        self.assertIn("## 其他", markdown)
+        self.assertNotIn("## 情报线索", markdown)
 
     def test_today_ranks_tracked_newsletter_ahead_of_account_notice(self) -> None:
         markdown = email_summary.build_intel_brief_draft(
@@ -4574,6 +4584,76 @@ class Issue50BriefQualityTest(unittest.TestCase):
             today = self._today_section(markdown)
             self.assertIn("1331", today)
             self.assertNotIn("1401", today)
+
+    def test_short_or_listed_keywords_are_not_meaningful_on_their_own(self) -> None:
+        self.assertFalse(email_summary.keyword_is_meaningful(""))
+        self.assertFalse(email_summary.keyword_is_meaningful("ai"))
+        self.assertFalse(email_summary.keyword_is_meaningful("rwa"))
+        self.assertTrue(email_summary.keyword_is_meaningful("openai"))
+        self.assertTrue(email_summary.keyword_is_meaningful("智能体"))
+
+    def test_ai_token_does_not_match_inside_gmail(self) -> None:
+        self.assertFalse(email_summary.keyword_in_text("ai", "user@gmail.com"))
+        self.assertFalse(email_summary.keyword_in_text("ai", "email summary"))
+        self.assertTrue(email_summary.keyword_in_text("ai", "The Rundown AI"))
+        self.assertFalse(email_summary.keyword_in_text("", "The Rundown AI"))
+        self.assertFalse(email_summary.keyword_in_text("   ", "The Rundown AI"))
+
+    def test_weak_keyword_counts_only_in_subject_or_sender(self) -> None:
+        body = "投资者正在做新的配置选择。"
+        self.assertTrue(email_summary.keyword_in_text("选择", body))
+        self.assertFalse(email_summary.keyword_matches_item("选择", body, "googlealerts rwa"))
+        self.assertTrue(email_summary.keyword_matches_item("选择", "请确认这个选择", "请确认这个选择"))
+
+    def test_account_notice_takeaway_leads_with_action(self) -> None:
+        item = self._google_account_slack()
+        takeaway = email_summary.delivery_takeaway(item)
+
+        self.assertTrue(takeaway.startswith("确认账号安全"), takeaway)
+        self.assertNotIn("；", takeaway)
+
+    def test_unmatched_newsletter_stays_in_digest_section(self) -> None:
+        item = self._item(
+            "1600",
+            "Weather Weekly <news@example.invalid>",
+            "Coastal rain this week",
+            "Rain is likely tomorrow across the coast.",
+            "newsletter_article",
+            [{"url": "https://example.invalid/rain", "normalized_url": "https://example.invalid/rain", "anchor_text": "Coastal rain"}],
+        )
+        markdown = email_summary.build_intel_brief_draft(self._scan(item))
+
+        self.assertIn("## 订阅摘要", markdown)
+        self.assertIn("https://example.invalid/rain", markdown)
+        self.assertNotIn("1600", self._today_section(markdown))
+
+    def test_human_confirm_with_tracked_topic_keeps_both_in_the_takeaway(self) -> None:
+        item = self._item(
+            "1800",
+            "Alex <alex@example.invalid>",
+            "Please reply: OpenAI eval notes",
+            "Please reply so we can lock the OpenAI eval.",
+            "personal",
+        )
+        takeaway = email_summary.delivery_takeaway(item)
+
+        self.assertTrue(takeaway.startswith("需要人工确认 / AI 行业 / Agent 战略："), takeaway)
+        self.assertNotIn("；", takeaway)
+
+    def test_human_confirm_action_without_topic_is_still_a_takeaway(self) -> None:
+        item = self._item(
+            "1700",
+            "Alex <alex@example.invalid>",
+            "Please reply about the schedule",
+            "Please reply so we can lock Friday.",
+            "personal",
+        )
+        markdown = email_summary.build_intel_brief_draft(self._scan(item))
+        takeaway = email_summary.delivery_takeaway(item)
+
+        self.assertIn("## 需要处理", markdown)
+        self.assertTrue(takeaway.startswith("需要人工确认"), takeaway)
+        self.assertNotIn("Please reply about the schedule；", takeaway)
 
 
 class LlmBriefTest(unittest.TestCase):

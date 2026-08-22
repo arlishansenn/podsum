@@ -718,6 +718,67 @@ def item_topic_text(item: dict[str, Any]) -> str:
     return "\n".join(parts).lower()
 
 
+WEAK_TOPIC_KEYWORDS = {
+    "ai",
+    "nb",
+    "vis",
+    "gui",
+    "workflow",
+    "power",
+    "community",
+    "github",
+    "meeting",
+    "ops",
+    "qq",
+    "ppt",
+    "prd",
+    "epub",
+    "gmail",
+    "imap",
+    "security",
+    "follow-up",
+    "选择",
+    "回复",
+    "组织",
+    "关系",
+    "决策",
+    "验证",
+    "会议",
+}
+
+
+def item_subject_sender(item: dict[str, Any]) -> str:
+    return clean_text(f"{item.get('from') or ''} {item.get('subject') or ''}", 1000).lower()
+
+
+def keyword_in_text(keyword: str, text: str) -> bool:
+    """ASCII token 按词边界匹配，避免 ai 命中 gmail、email。"""
+    key = keyword.strip().lower()
+    if not key:
+        return False
+    haystack = text.lower()
+    if re.fullmatch(r"[a-z0-9][a-z0-9+._-]*", key):
+        return re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", haystack) is not None
+    return key in haystack
+
+
+def keyword_is_meaningful(keyword: str) -> bool:
+    normalized = keyword.strip().lower()
+    if not normalized or normalized in WEAK_TOPIC_KEYWORDS:
+        return False
+    if re.fullmatch(r"[a-z]{1,3}", normalized):
+        return False
+    return True
+
+
+def keyword_matches_item(keyword: str, haystack: str, subject_sender: str) -> bool:
+    if not keyword_in_text(keyword, haystack):
+        return False
+    if keyword_is_meaningful(keyword):
+        return True
+    return keyword_in_text(keyword, subject_sender) and len(keyword.strip()) >= 2
+
+
 def match_item_topics(item: dict[str, Any], topic_map: dict[str, Any]) -> list[dict[str, Any]]:
     haystack = item_topic_text(item)
     subject_sender = item_subject_sender(item)
@@ -2236,56 +2297,9 @@ ACTION_SIGNAL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"action required|please confirm|please review|please reply|follow-?up|会议|截止|请确认|请回复|需要.{0,12}处理", re.IGNORECASE), "需要人工确认"),
 )
 
-WEAK_TOPIC_KEYWORDS = {
-    "ai",
-    "nb",
-    "vis",
-    "gui",
-    "workflow",
-    "power",
-    "community",
-    "github",
-    "meeting",
-    "ops",
-    "qq",
-    "ppt",
-    "prd",
-    "epub",
-    "gmail",
-    "imap",
-    "security",
-    "follow-up",
-    "选择",
-    "回复",
-    "组织",
-    "关系",
-    "决策",
-    "验证",
-    "会议",
+NOTIFICATION_ACTIONS = {
+    reason for _pattern, reason in ACTION_SIGNAL_PATTERNS if reason != "需要人工确认"
 }
-
-
-def item_subject_sender(item: dict[str, Any]) -> str:
-    return clean_text(f"{item.get('from') or ''} {item.get('subject') or ''}", 1000).lower()
-
-
-def keyword_in_text(keyword: str, text: str) -> bool:
-    """ASCII token 按词边界匹配，避免 ai 命中 gmail、email。"""
-    key = keyword.strip().lower()
-    if not key:
-        return False
-    haystack = text.lower()
-    if re.fullmatch(r"[a-z0-9][a-z0-9+._-]*", key):
-        return re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", haystack) is not None
-    return key in haystack
-
-
-def keyword_matches_item(keyword: str, haystack: str, subject_sender: str) -> bool:
-    if not keyword_in_text(keyword, haystack):
-        return False
-    if keyword_is_meaningful(keyword):
-        return True
-    return keyword_in_text(keyword, subject_sender) and len(keyword.strip()) >= 2
 
 
 def item_plaintext(item: dict[str, Any]) -> str:
@@ -2317,7 +2331,7 @@ def is_internal_test_email(item: dict[str, Any]) -> bool:
 
 
 def is_bulk_or_newsletter_sender(item: dict[str, Any]) -> bool:
-    sender_subject = clean_text(f"{item.get('from') or ''} {item.get('subject') or ''}", 1000).lower()
+    sender_subject = item_subject_sender(item)
     bulk_hints = (
         "google alerts",
         "newsletter",
@@ -2348,15 +2362,6 @@ def action_reason(item: dict[str, Any]) -> str:
     if email_type == "personal" and not is_bulk_or_newsletter_sender(item):
         return "需要人工确认"
     return ""
-
-
-def keyword_is_meaningful(keyword: str) -> bool:
-    normalized = keyword.strip().lower()
-    if not normalized or normalized in WEAK_TOPIC_KEYWORDS:
-        return False
-    if re.fullmatch(r"[a-z]{1,3}", normalized):
-        return False
-    return True
 
 
 def delivery_topic_match(item: dict[str, Any], topic: dict[str, Any]) -> bool:
@@ -2400,13 +2405,6 @@ def delivery_excerpt(item: dict[str, Any], limit: int = 150) -> str:
     return clean_text(text, limit)
 
 
-NOTIFICATION_ACTIONS = {
-    "确认账号安全",
-    "核对账单或账户文件",
-    "确认订阅或数据保留",
-}
-
-
 def is_pure_notification(item: dict[str, Any]) -> bool:
     return action_reason(item) in NOTIFICATION_ACTIONS
 
@@ -2430,21 +2428,9 @@ def delivery_takeaway(item: dict[str, Any]) -> str:
     return body
 
 
-def delivery_item_line(scan: dict[str, Any], item: dict[str, Any], label: str) -> str:
+def delivery_item_line(scan: dict[str, Any], item: dict[str, Any]) -> str:
     # 段落标题已经承载分类；行首再写「线索：」没有信息量。
-    _ = label
     return f"- {source_markdown_link(scan, item)} {delivery_takeaway(item)}"
-
-
-def delivery_item_label(item: dict[str, Any], fallback: str = "值得知道") -> str:
-    action = action_reason(item)
-    topic = delivery_primary_topic(item)
-    topic_name = str(topic.get("name") or "") if topic else ""
-    if action and action != "需要人工确认":
-        return action
-    if action and topic_name:
-        return f"{action} / {topic_name}"
-    return action or topic_name or fallback
 
 
 def delivery_evidence_boundary(scan: dict[str, Any], displayed_items: list[dict[str, Any]]) -> list[str]:
@@ -2554,7 +2540,7 @@ def build_intel_brief_draft(scan: dict[str, Any], reason: str = "", *, notice: s
     lines = [f"# Morning Brief - {scan['date']}", "", "## 今天先看", ""]
     if top_items:
         for item in top_items:
-            lines.append(delivery_item_line(scan, item, delivery_item_label(item)))
+            lines.append(delivery_item_line(scan, item))
             displayed.append(item)
     else:
         lines.append("- 今天没有需要优先处理或记录的邮件线索。")
@@ -2563,7 +2549,7 @@ def build_intel_brief_draft(scan: dict[str, Any], reason: str = "", *, notice: s
     if action_items:
         lines.extend(["", "## 需要处理", ""])
         for item in action_items[:5]:
-            lines.append(delivery_item_line(scan, item, delivery_item_label(item, "需要处理")))
+            lines.append(delivery_item_line(scan, item))
             displayed.append(item)
             displayed_uids.add(str(item.get("uid") or ""))
 
@@ -2578,23 +2564,22 @@ def build_intel_brief_draft(scan: dict[str, Any], reason: str = "", *, notice: s
         topic_name = str(topic.get("name") or topic.get("id") or "情报线索")
         topic_sections.setdefault(topic_name, []).append(item)
     remaining_other = [item for item in other_items if str(item.get("uid") or "") not in displayed_uids]
-    if topic_sections or remaining_other:
+    if topic_sections:
         lines.extend(["", "## 情报线索", ""])
         for topic_name, topic_items in topic_sections.items():
             lines.append(f"### {topic_name}")
             for item in sorted(topic_items, key=lambda value: -delivery_item_score(value))[:3]:
-                lines.append(delivery_item_line(scan, item, "线索"))
+                lines.append(delivery_item_line(scan, item))
                 displayed.append(item)
                 displayed_uids.add(str(item.get("uid") or ""))
             lines.append("")
-        if remaining_other:
-            lines.append("### 其他")
-            for item in remaining_other[:5]:
-                lines.append(delivery_item_line(scan, item, "其他"))
-                displayed.append(item)
-            lines.append("")
         if lines[-1] == "":
             lines.pop()
+    if remaining_other:
+        lines.extend(["", "## 其他", ""])
+        for item in remaining_other[:5]:
+            lines.append(delivery_item_line(scan, item))
+            displayed.append(item)
 
     digest_lines = digest_section_lines(scan, digest_items)
     if digest_lines:
