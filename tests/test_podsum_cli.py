@@ -162,7 +162,7 @@ class EmailSummaryPromptTest(unittest.TestCase):
         prompt = email_summary_prompt_text()
 
         self.assertIn("# Morning Brief - {date}", prompt)
-        for heading in ("## 今天先看", "## 需要处理", "## 情报线索", "## 证据边界"):
+        for heading in ("## 今天先看", "## 需要处理", "## 情报线索", "## 其他", "## 证据边界"):
             with self.subTest(heading=heading):
                 self.assertIn(heading, prompt)
 
@@ -1214,7 +1214,10 @@ class PodsumCliTest(unittest.TestCase):
         self.assertIn("## 证据边界", markdown)
         self.assertIn("[UID 983](email://2026-07-05/983)", markdown)
         self.assertIn("[UID 976](email://2026-07-05/976)", markdown)
-        self.assertLess(markdown.find("UID 983"), markdown.find("UID 976"))
+        today = markdown.split("## 今天先看", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("UID 976", today)
+        self.assertNotIn("UID 983", today)
+        self.assertLess(markdown.find("UID 976"), markdown.find("UID 983"))
         self.assertEqual(markdown.count("email://2026-07-05/983"), 1)
         self.assertEqual(markdown.count("email://2026-07-05/976"), 1)
         self.assertNotIn("酒鬼酒", markdown)
@@ -4399,6 +4402,180 @@ class DigestRenderingTest(unittest.TestCase):
         self.assertNotIn("空地址", section)
 
 
+class Issue50BriefQualityTest(unittest.TestCase):
+    """邮件 brief 必须是归纳，分类跟 topic.md 走，不要标题截断也不要硬塞话题。"""
+
+    TOPIC_FILE = ROOT / "outputs" / "topic.md.example"
+    EML_DIR = ROOT / "tests" / "fixtures" / "email_summary_issue50"
+
+    def _topic_map(self) -> dict[str, Any]:
+        return email_summary.load_topic_map(self.TOPIC_FILE)
+
+    def _item(
+        self,
+        uid: str,
+        sender: str,
+        subject: str,
+        snippet: str,
+        email_type: str,
+        links: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        item = {
+            "uid": uid,
+            "date": "Fri, 21 Aug 2026 08:00:00 +0800",
+            "from": sender,
+            "subject": subject,
+            "snippet": snippet,
+            "email_type": email_type,
+            "has_attachments": False,
+            "links": links or [],
+            "evidence": [{"type": "email_snippet", "status": "available", "excerpt": snippet}],
+            "risks": ["snippet_only"],
+            "flags": [],
+        }
+        item["topics"] = email_summary.match_item_topics(item, self._topic_map())
+        return item
+
+    def _scan(self, *items: dict[str, Any]) -> dict[str, Any]:
+        scan = {
+            "object_type": "email_evidence_pack",
+            "object_version": email_summary.EVIDENCE_PACK_VERSION,
+            "status": "ready_for_summary",
+            "date": "2026-08-21",
+            "account": "fixture@example.invalid",
+            "window": "1d",
+            "scan_limit": 20,
+            "raw_count": len(items),
+            "possibly_truncated": False,
+            "items": list(items),
+        }
+        return email_summary.apply_topics(scan, self._topic_map())
+
+    def _ai_newsletter(self) -> dict[str, Any]:
+        return self._item(
+            "1331",
+            "The Rundown AI <news@daily.therundown.ai>",
+            "Software is writing itself",
+            "Read the full letter → Watch the interview with Todd → Read Alex's full post → OpenAI and Anthropic both shipped new agent tools this week.",
+            "newsletter_article",
+            [{"url": "https://example.invalid/software-writing", "normalized_url": "https://example.invalid/software-writing", "anchor_text": "Read the full letter"}],
+        )
+
+    def _google_account_slack(self) -> dict[str, Any]:
+        return self._item(
+            "1401",
+            "Google <no-reply@accounts.google.com>",
+            "您与 Slack 共享了 Google 账号数据",
+            "Slack 正在使用您的 Google 账号 (user@gmail.com) 访问部分数据。如果这不是您本人操作，请立即检查账号安全。",
+            "unknown",
+        )
+
+    def _rwa_alert(self) -> dict[str, Any]:
+        return self._item(
+            "1329",
+            "Google Alerts <googlealerts-noreply@google.com>",
+            "Google快讯 - RWA",
+            "RWA 在 DeFi 活跃资金逼近 40 亿美元。投资者正在做新的配置选择。",
+            "google_alert",
+            [{"url": "https://example.invalid/rwa-defi", "normalized_url": "https://example.invalid/rwa-defi", "anchor_text": "RWA 在 DeFi 活跃资金逼近 40 亿美元", "context": "据 DefiLlama 数据，规模升至约 39.8 亿美元。"}],
+        )
+
+    def _today_section(self, markdown: str) -> str:
+        after = markdown.split("## 今天先看", 1)[1]
+        return after.split("\n## ", 1)[0]
+
+    def test_brief_line_is_not_subject_semicolon_excerpt(self) -> None:
+        item = self._ai_newsletter()
+        markdown = email_summary.build_intel_brief_draft(self._scan(item))
+        line = email_summary.delivery_item_line({"date": "2026-08-21"}, item, "线索")
+
+        self.assertNotIn("Software is writing itself；", line)
+        self.assertNotIn("Software is writing itself；", markdown)
+        self.assertNotIn("线索：", markdown)
+
+    def test_google_account_sharing_is_not_local_infra(self) -> None:
+        item = self._google_account_slack()
+        names = [str(topic.get("name") or "") for topic in item["topics"]]
+        markdown = email_summary.build_intel_brief_draft(self._scan(item))
+
+        self.assertNotIn("Podsum / Hermes / 本地基础设施", names)
+        self.assertNotIn("Podsum / Hermes / 本地基础设施", markdown)
+
+    def test_google_alerts_rwa_is_not_personal_strategy(self) -> None:
+        item = self._rwa_alert()
+        names = [str(topic.get("name") or "") for topic in item["topics"]]
+        markdown = email_summary.build_intel_brief_draft(self._scan(item))
+
+        self.assertNotIn("个人选择 / 组织策略", names)
+        self.assertNotIn("个人选择 / 组织策略", markdown)
+        self.assertIn("## 订阅摘要", markdown)
+        self.assertIn("https://example.invalid/rwa-defi", markdown)
+
+    def test_unmatched_intel_goes_to_other_not_a_forced_topic(self) -> None:
+        item = self._item(
+            "1500",
+            "News <news@example.invalid>",
+            "A weather digest nobody tracks",
+            "Rain is likely tomorrow across the coast. Investors are making a 选择 about umbrellas.",
+            "unknown",
+        )
+        markdown = email_summary.build_intel_brief_draft(self._scan(item))
+
+        self.assertNotIn("个人选择 / 组织策略", markdown)
+        self.assertIn("### 其他", markdown)
+
+    def test_today_ranks_tracked_newsletter_ahead_of_account_notice(self) -> None:
+        markdown = email_summary.build_intel_brief_draft(
+            self._scan(self._google_account_slack(), self._ai_newsletter(), self._rwa_alert())
+        )
+        today = self._today_section(markdown)
+
+        self.assertIn("1331", today)
+        self.assertNotIn("1401", today)
+        self.assertNotIn("1329", today)
+        self.assertIn("[UID 1401](email://2026-08-21/1401)", markdown)
+        self.assertLess(markdown.find("UID 1331"), markdown.find("UID 1401"))
+
+    def test_eml_fixtures_produce_a_brief_without_title_body_truncation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            result = run_podsum(
+                "email-summary",
+                "--eml-dir",
+                str(self.EML_DIR),
+                "--email-topic-file",
+                str(self.TOPIC_FILE),
+                "--output",
+                str(tmp_path / "downloads"),
+                "--dry-run",
+                "--no-send",
+                "--summary-engine",
+                "podsum",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            reports = tmp_path / "downloads" / "EmailReports"
+            scan = json.loads(next(reports.glob("email-scan-*.json")).read_text(encoding="utf-8"))
+            markdown = next(reports.glob("email-summary-*.md")).read_text(encoding="utf-8")
+            by_uid = {str(item["uid"]): item for item in scan["items"]}
+
+            self.assertEqual(set(by_uid), {"1331", "1401", "1329"})
+            for item in scan["items"]:
+                self.assertNotIn(f"{item['subject']}；", markdown, item["uid"])
+            self.assertNotIn("线索：", markdown)
+
+            slack_topics = [str(topic.get("name") or "") for topic in by_uid["1401"].get("topics", [])]
+            rwa_topics = [str(topic.get("name") or "") for topic in by_uid["1329"].get("topics", [])]
+            self.assertNotIn("Podsum / Hermes / 本地基础设施", slack_topics)
+            self.assertNotIn("个人选择 / 组织策略", rwa_topics)
+            self.assertNotIn("Podsum / Hermes / 本地基础设施", markdown)
+            self.assertNotIn("个人选择 / 组织策略", markdown)
+
+            today = self._today_section(markdown)
+            self.assertIn("1331", today)
+            self.assertNotIn("1401", today)
+
+
 class LlmBriefTest(unittest.TestCase):
     """podsum 引擎的 brief 必须由 LLM 写；模板是失败时的兜底，不是常态。"""
 
@@ -4464,7 +4641,8 @@ class LlmBriefTest(unittest.TestCase):
         """writer 为空就是 dry-run 那条路：不调 LLM，输出确定。"""
         markdown = self._compose(None)
 
-        self.assertIn("Fixture Follow-up", markdown)
+        self.assertIn("[UID 77](email://2026-08-21/77)", markdown)
+        self.assertIn("需要回复的邮件", markdown)
         self.assertNotIn("dry-run", markdown, "内部处理用语不进正文")
 
     def test_writer_is_what_produces_the_brief_when_present(self) -> None:
@@ -4494,13 +4672,13 @@ class LlmBriefTest(unittest.TestCase):
 
         self.assertEqual(len(calls), 1)
         self.assertIn("# Morning Brief - 2026-08-21", markdown)
-        self.assertIn("Fixture Follow-up", markdown, "回落到确定性模板")
+        self.assertIn("[UID 77](email://2026-08-21/77)", markdown, "回落到确定性模板")
         self.assertIn("降级", markdown, "降级必须写进 brief，否则没人知道今天这份是模板")
 
     def test_empty_llm_output_also_falls_back(self) -> None:
         markdown, _ = self._render((True, "   "))
 
-        self.assertIn("Fixture Follow-up", markdown)
+        self.assertIn("[UID 77](email://2026-08-21/77)", markdown)
         self.assertIn("降级", markdown)
 
     @staticmethod

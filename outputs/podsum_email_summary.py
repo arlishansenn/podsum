@@ -720,12 +720,13 @@ def item_topic_text(item: dict[str, Any]) -> str:
 
 def match_item_topics(item: dict[str, Any], topic_map: dict[str, Any]) -> list[dict[str, Any]]:
     haystack = item_topic_text(item)
+    subject_sender = item_subject_sender(item)
     matches: list[dict[str, Any]] = []
     for index, topic in enumerate(topic_map.get("topics", [])):
         if not isinstance(topic, dict):
             continue
         keywords = topic_keywords(topic)
-        matched = [keyword for keyword in keywords if keyword.lower() in haystack]
+        matched = [keyword for keyword in keywords if keyword_matches_item(keyword, haystack, subject_sender)]
         if not matched:
             continue
         topic_id = str(topic.get("id") or topic.get("name") or f"topic_{index + 1}")
@@ -2250,7 +2251,41 @@ WEAK_TOPIC_KEYWORDS = {
     "ppt",
     "prd",
     "epub",
+    "gmail",
+    "imap",
+    "security",
+    "follow-up",
+    "选择",
+    "回复",
+    "组织",
+    "关系",
+    "决策",
+    "验证",
+    "会议",
 }
+
+
+def item_subject_sender(item: dict[str, Any]) -> str:
+    return clean_text(f"{item.get('from') or ''} {item.get('subject') or ''}", 1000).lower()
+
+
+def keyword_in_text(keyword: str, text: str) -> bool:
+    """ASCII token 按词边界匹配，避免 ai 命中 gmail、email。"""
+    key = keyword.strip().lower()
+    if not key:
+        return False
+    haystack = text.lower()
+    if re.fullmatch(r"[a-z0-9][a-z0-9+._-]*", key):
+        return re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", haystack) is not None
+    return key in haystack
+
+
+def keyword_matches_item(keyword: str, haystack: str, subject_sender: str) -> bool:
+    if not keyword_in_text(keyword, haystack):
+        return False
+    if keyword_is_meaningful(keyword):
+        return True
+    return keyword_in_text(keyword, subject_sender) and len(keyword.strip()) >= 2
 
 
 def item_plaintext(item: dict[str, Any]) -> str:
@@ -2325,20 +2360,10 @@ def keyword_is_meaningful(keyword: str) -> bool:
 
 
 def delivery_topic_match(item: dict[str, Any], topic: dict[str, Any]) -> bool:
-    text = item_plaintext(item).lower()
-    subject_sender = clean_text(f"{item.get('from') or ''} {item.get('subject') or ''}", 1000).lower()
+    text = item_plaintext(item)
+    subject_sender = item_subject_sender(item)
     matched = [str(keyword or "").strip() for keyword in topic.get("matched_keywords", []) if str(keyword or "").strip()]
-    if not matched:
-        return False
-    for keyword in matched:
-        key = keyword.lower()
-        if not key or key not in text:
-            continue
-        if keyword_is_meaningful(key):
-            return True
-        if key in subject_sender and len(key) >= 2:
-            return True
-    return False
+    return any(keyword_matches_item(keyword, text, subject_sender) for keyword in matched)
 
 
 def delivery_primary_topic(item: dict[str, Any]) -> dict[str, Any] | None:
@@ -2375,13 +2400,40 @@ def delivery_excerpt(item: dict[str, Any], limit: int = 150) -> str:
     return clean_text(text, limit)
 
 
-def delivery_item_line(scan: dict[str, Any], item: dict[str, Any], label: str) -> str:
-    subject = clean_text(str(item.get("subject") or ""), 90)
+NOTIFICATION_ACTIONS = {
+    "确认账号安全",
+    "核对账单或账户文件",
+    "确认订阅或数据保留",
+}
+
+
+def is_pure_notification(item: dict[str, Any]) -> bool:
+    return action_reason(item) in NOTIFICATION_ACTIONS
+
+
+def delivery_takeaway(item: dict[str, Any]) -> str:
+    """一条线索的判断。禁止 `标题；正文截断`：那不是归纳。"""
     excerpt = delivery_excerpt(item)
-    detail = subject
-    if excerpt and excerpt.lower() not in subject.lower():
-        detail = f"{subject}；{excerpt}"
-    return f"- {label}：{source_markdown_link(scan, item)} {detail}。"
+    subject = clean_text(str(item.get("subject") or ""), 90)
+    action = action_reason(item)
+    topic = delivery_primary_topic(item)
+    topic_name = str(topic.get("name") or "") if topic else ""
+    body = excerpt or subject
+    if not body:
+        return action or topic_name
+    if is_pure_notification(item) and action:
+        return f"{action}：{body}"
+    if action and topic_name:
+        return f"{action} / {topic_name}：{body}"
+    if action:
+        return f"{action}：{body}"
+    return body
+
+
+def delivery_item_line(scan: dict[str, Any], item: dict[str, Any], label: str) -> str:
+    # 段落标题已经承载分类；行首再写「线索：」没有信息量。
+    _ = label
+    return f"- {source_markdown_link(scan, item)} {delivery_takeaway(item)}"
 
 
 def delivery_item_label(item: dict[str, Any], fallback: str = "值得知道") -> str:
@@ -2419,7 +2471,13 @@ def unique_delivery_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def is_digest_item(item: dict[str, Any]) -> bool:
-    return str(item.get("email_type") or "") in DIGEST_EMAIL_TYPES
+    """链接列表进订阅摘要；命中跟踪话题的 newsletter 按情报条目写。"""
+    email_type = str(item.get("email_type") or "")
+    if email_type in {"google_alert", "digest"}:
+        return True
+    if email_type == "newsletter_article":
+        return delivery_primary_topic(item) is None
+    return False
 
 
 def merge_digest_groups(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -2484,15 +2542,14 @@ def build_intel_brief_draft(scan: dict[str, Any], reason: str = "", *, notice: s
     items = [item for item in all_items if not is_digest_item(item)]
     action_items = [item for item in items if action_reason(item)]
     intel_items = [item for item in items if not action_reason(item) and delivery_primary_topic(item)]
-    low_priority_items = [
+    other_items = [
         item
         for item in items
         if item not in action_items
         and item not in intel_items
-        and delivery_item_score(item) > 10
+        and (item.get("snippet") or item.get("subject"))
     ]
-    ranked = sorted(action_items + intel_items + low_priority_items, key=lambda item: (-delivery_item_score(item), str(item.get("date") or "")))
-    top_items = ranked[:5]
+    top_items = sorted(intel_items, key=lambda item: (-delivery_item_score(item), str(item.get("date") or "")))[:5]
     displayed: list[dict[str, Any]] = []
     lines = [f"# Morning Brief - {scan['date']}", "", "## 今天先看", ""]
     if top_items:
@@ -2503,10 +2560,9 @@ def build_intel_brief_draft(scan: dict[str, Any], reason: str = "", *, notice: s
         lines.append("- 今天没有需要优先处理或记录的邮件线索。")
 
     displayed_uids = {str(item.get("uid") or "") for item in displayed}
-    remaining_actions = [item for item in action_items if str(item.get("uid") or "") not in displayed_uids]
-    if remaining_actions:
+    if action_items:
         lines.extend(["", "## 需要处理", ""])
-        for item in remaining_actions[:5]:
+        for item in action_items[:5]:
             lines.append(delivery_item_line(scan, item, delivery_item_label(item, "需要处理")))
             displayed.append(item)
             displayed_uids.add(str(item.get("uid") or ""))
@@ -2521,7 +2577,8 @@ def build_intel_brief_draft(scan: dict[str, Any], reason: str = "", *, notice: s
             continue
         topic_name = str(topic.get("name") or topic.get("id") or "情报线索")
         topic_sections.setdefault(topic_name, []).append(item)
-    if topic_sections:
+    remaining_other = [item for item in other_items if str(item.get("uid") or "") not in displayed_uids]
+    if topic_sections or remaining_other:
         lines.extend(["", "## 情报线索", ""])
         for topic_name, topic_items in topic_sections.items():
             lines.append(f"### {topic_name}")
@@ -2530,15 +2587,14 @@ def build_intel_brief_draft(scan: dict[str, Any], reason: str = "", *, notice: s
                 displayed.append(item)
                 displayed_uids.add(str(item.get("uid") or ""))
             lines.append("")
+        if remaining_other:
+            lines.append("### 其他")
+            for item in remaining_other[:5]:
+                lines.append(delivery_item_line(scan, item, "其他"))
+                displayed.append(item)
+            lines.append("")
         if lines[-1] == "":
             lines.pop()
-
-    remaining_low_priority = [item for item in low_priority_items if str(item.get("uid") or "") not in displayed_uids]
-    if remaining_low_priority:
-        lines.extend(["", "## 低优先级", ""])
-        for item in remaining_low_priority[:3]:
-            lines.append(delivery_item_line(scan, item, "可稍后看"))
-            displayed.append(item)
 
     digest_lines = digest_section_lines(scan, digest_items)
     if digest_lines:
