@@ -4592,18 +4592,20 @@ class EditableFilesDocTest(unittest.TestCase):
             with self.subTest(flag=flag):
                 self.assertIn(flag, help_text)
 
-    def test_link_policy_row_points_mailbox_scan_at_the_env(self) -> None:
+    def test_section_points_mailbox_scan_at_the_env(self) -> None:
         """扫描范围不在 policy 文件里，只改 md 会漏掉 Junk。"""
-        row = next(
+        section = self._section()
+
+        self.assertIn("PODSUM_EMAIL_IMAP_MAILBOX", section)
+        self.assertIn("INBOX,Junk", section)
+        self.assertIn("exmail", section)
+
+        policy_row = next(
             line
-            for line in self._section().splitlines()
+            for line in section.splitlines()
             if line.startswith("|") and "`email_link_policy.md`" in line
         )
-
-        self.assertIn("PODSUM_EMAIL_IMAP_MAILBOX", row)
-        self.assertIn("INBOX,Junk", row)
-        self.assertIn("exmail", row)
-        self.assertIn("Junk", row)
+        self.assertNotIn("PODSUM_EMAIL_IMAP_MAILBOX", policy_row)
 
 
 class FakeImapServer:

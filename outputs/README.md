@@ -397,7 +397,9 @@ missing, and it never overwrites one that already exists.
 |---|---|
 | `email_summary_prompt.md` | How the brief is written: section structure, per-link expansion of digest mail, how evidence limits are worded, how sources are embedded as Markdown links. |
 | `topic.md` | Which topics the brief tracks. Only mail that matches a topic reaches the main sections, so add a topic here to surface something, and reorder priority here to change what leads. |
-| `email_link_policy.md` | How mail is classified and how many links get fetched: 2 links per email, 10 links in total, plus the URL patterns to skip. Mailbox scan scope lives outside this file, in the `PODSUM_EMAIL_IMAP_MAILBOX` environment variable, which now accepts comma-separated values such as `INBOX,Junk`; exmail users should add `Junk`. |
+| `email_link_policy.md` | How mail is classified and how many links get fetched: 2 links per email, 10 links in total, plus the URL patterns to skip. |
+
+These files do not choose which mailbox folders IMAP scans. That is `PODSUM_EMAIL_IMAP_MAILBOX` in the env file: comma-separated, for example `INBOX,Junk`. exmail users should add `Junk`.
 
 ### Verify a change without rereading the mailbox
 
